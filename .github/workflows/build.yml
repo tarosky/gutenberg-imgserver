@@ -25,7 +25,7 @@ jobs:
       env:
         TEST_AWS_SECRET_ACCESS_KEY: ${{secrets.TEST_AWS_SECRET_ACCESS_KEY}}
     - run: go get -u github.com/jstemmer/go-junit-report
-    - run: go test -v ./imgserver 2>&1 | tee /dev/stderr | go-junit-report > work/report.xml
+    - run: go test -v ./... 2>&1 | tee /dev/stderr | go-junit-report > work/report.xml
     - name: Publish Unit Test Results
       uses: EnricoMi/publish-unit-test-result-action@v1.6
       if: always()
