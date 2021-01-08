@@ -1,0 +1,195 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"path"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
+)
+
+const (
+	sampleJPEG     = "sampleimg/image.jpg"
+	sampleJPEGWebP = "sampleimg/image.jpg.webp"
+	samplePNG      = "sampleimg/image.png"
+	samplePNGWebP  = "sampleimg/image.png.webp"
+
+	sampleJPEGSize     = int64(23838)
+	sampleJPEGWebPSize = int64(5294)
+	samplePNGSize      = int64(28877)
+	samplePNGWebPSize  = int64(5138)
+
+	chromeAcceptHeader    = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+	oldSafariAcceptHeader = "image/png,image/svg+xml,image/*;q=0.8,video/*;q=0.8,*/*;q=0.5"
+)
+
+var (
+	oldModTime         = time.Date(2019, time.January, 1, 0, 0, 0, 0, time.UTC)
+	oldLastModified    = oldModTime.Format(http.TimeFormat)
+	sampleModTime      = time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
+	sampleLastModified = sampleModTime.Format(http.TimeFormat)
+	sampleS3Timestamp  = sampleModTime.Format(time.RFC3339Nano)
+	sampleJPEGETag     = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleJPEGSize)
+	samplePNGETag      = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), samplePNGSize)
+)
+
+// InitTest moves working directory to project root directory.
+// https://brandur.org/fragments/testing-go-project-root
+func InitTest() {
+	_, filename, _, _ := runtime.Caller(0)
+	dir := path.Join(path.Dir(filename), ".")
+	err := os.Chdir(dir)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func readTestConfig(name string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic("failed to get current working directory")
+	}
+
+	path := cwd + "/config/test/" + name
+	val, err := ioutil.ReadFile(path)
+	if err != nil {
+		panic("failed to load config file: " + path + ", error: " + err.Error())
+	}
+	return strings.TrimSpace(string(val))
+}
+
+func generateSafeRandomString() string {
+	v := make([]byte, 256/8)
+	if _, err := rand.Read(v); err != nil {
+		panic(err.Error())
+	}
+
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(v)
+}
+
+func getTestConfig(name string) *config {
+	region := "ap-northeast-1"
+	sqsName := "test-" + name + "-" + generateSafeRandomString()
+	sqsURL := fmt.Sprintf("https://sqs.%s.amazonaws.com/%s/%s",
+		region,
+		readTestConfig("aws-account-id"),
+		sqsName)
+	efsPath := fmt.Sprintf("work/test/%s/%s", name, generateSafeRandomString())
+
+	return &config{
+		region:                  region,
+		accessKeyID:             readTestConfig("access-key-id"),
+		secretAccessKey:         readTestConfig("secret-access-key"),
+		s3Bucket:                readTestConfig("s3-bucket"),
+		s3KeyBase:               generateSafeRandomString() + "/" + name,
+		sqsQueueURL:             sqsURL,
+		sqsBatchWaitTime:        2,
+		efsMountPath:            efsPath,
+		temporaryCache:          fmt.Sprintf("public, max-age=%d", 20*60),
+		permanentCache:          fmt.Sprintf("public, max-age=%d", 365*24*60*60),
+		gracefulShutdownTimeout: 5,
+		port:                    0, // Not used
+		log:                     createLogger(),
+	}
+}
+
+func getTestSQSQueueNameFromURL(url string) string {
+	parts := strings.Split(url, "/")
+	return parts[len(parts)-1]
+}
+
+func newTestEnvironment(name string, s *TestSuite) *environment {
+	e := newEnvironment(getTestConfig(name))
+
+	sqsName := getTestSQSQueueNameFromURL(e.sqsQueueURL)
+
+	_, err := e.sqsClient.CreateQueueWithContext(s.ctx, &sqs.CreateQueueInput{
+		QueueName: &sqsName,
+	})
+	require.NoError(s.T(), err, "failed to create SQS queue")
+
+	require.NoError(
+		s.T(),
+		os.RemoveAll(e.efsMountPath),
+		"failed to remove directory")
+
+	require.NoError(
+		s.T(),
+		os.MkdirAll(e.efsMountPath, 0755),
+		"failed to create directory")
+
+	return e
+}
+
+func initTestSuite(name string, t require.TestingT) *TestSuite {
+	InitTest()
+	require.NoError(t, os.RemoveAll("work/test/"+name), "failed to remove directory")
+	ctx := context.Background()
+
+	return &TestSuite{ctx: ctx}
+}
+
+func cleanTestEnvironment(ctx context.Context, s *TestSuite) {
+	if _, err := s.env.sqsClient.DeleteQueueWithContext(ctx, &sqs.DeleteQueueInput{
+		QueueUrl: &s.env.sqsQueueURL,
+	}); err != nil {
+		s.env.log.Error("failed to clean up SQS queue", zap.Error(err))
+	}
+}
+
+// TestSuite holds configs and sessions required to execute program.
+type TestSuite struct {
+	suite.Suite
+	env *environment
+	ctx context.Context
+}
+
+func copy(src, dst string, s *suite.Suite) {
+	in, err := os.Open(src)
+	s.Require().NoError(err)
+	defer func() {
+		s.Require().NoError(in.Close())
+	}()
+
+	out, err := os.Create(dst)
+	s.Require().NoError(err)
+	defer func() {
+		s.Require().NoError(out.Close())
+		s.Require().NoError(os.Chtimes(dst, sampleModTime, sampleModTime))
+	}()
+
+	{
+		_, err := io.Copy(out, in)
+		s.Require().NoError(err)
+	}
+}
+
+type httpHeader http.Response
+
+func (h *httpHeader) cacheControl() string {
+	return h.Header.Get(cacheControlHeader)
+}
+
+func (h *httpHeader) contentType() string {
+	return h.Header.Get(contentTypeHeader)
+}
+
+func (h *httpHeader) eTag() string {
+	return h.Header.Get(eTagHeader)
+}
+
+func (h *httpHeader) lastModified() string {
+	return h.Header.Get(lastModifiedHeader)
+}
