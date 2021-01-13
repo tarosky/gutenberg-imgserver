@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -129,14 +130,36 @@ func (s *ImgServerSuite) assertNoSQSMessage(ctx context.Context) {
 	s.Assert().Empty(msgs)
 }
 
-func (s *ImgServerSuite) uploadToS3(
+func (s *ImgServerSuite) assertS3SrcExists(
 	ctx context.Context,
 	path string,
 	lastModified *time.Time,
+	contentType string,
+	contentLength int64,
+) {
+	key := s.env.s3SrcKeyBase + "/" + path
+	res, err := s.env.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+		Bucket: &s.env.s3Bucket,
+		Key:    &key,
+	})
+	s.Assert().NoError(err)
+	s.Assert().Equal(path, *res.Metadata[pathMetadata])
+	t, err := time.Parse(time.RFC3339Nano, *res.Metadata[timestampMetadata])
+	s.Assert().NoError(err)
+	s.Assert().Equal(lastModified.UTC(), t)
+	s.Assert().Equal(contentType, *res.ContentType)
+	s.Assert().Equal(contentLength, *res.ContentLength)
+}
+
+func (s *ImgServerSuite) uploadToS3(
+	ctx context.Context,
+	key string,
+	bodyPath string,
+	contentType string,
+	metadataPath string,
+	lastModified *time.Time,
 ) string {
-	contentType := webPContentType
-	key := s.env.s3KeyBase + "/" + path + ".webp"
-	f, err := os.Open(sampleJPEGWebP)
+	f, err := os.Open(bodyPath)
 	s.Require().NoError(err)
 	defer func() {
 		s.Require().NoError(f.Close())
@@ -156,8 +179,8 @@ func (s *ImgServerSuite) uploadToS3(
 		Body:        f,
 		ContentType: &contentType,
 		Metadata: map[string]*string{
-			"Original-Path":      &path,
-			"Original-Timestamp": &tsStr,
+			pathMetadata:      &metadataPath,
+			timestampMetadata: &tsStr,
 		},
 	})
 	s.Require().NoError(err)
@@ -165,9 +188,49 @@ func (s *ImgServerSuite) uploadToS3(
 	return quoteETag(*res.ETag)
 }
 
+func (s *ImgServerSuite) uploadWebPToS3(
+	ctx context.Context,
+	path string,
+	bodyPath string,
+	lastModified *time.Time,
+) string {
+	return s.uploadToS3(
+		ctx,
+		s.env.s3DestKeyBase+"/"+path+".webp",
+		bodyPath,
+		webPContentType,
+		path,
+		lastModified)
+}
+
+func (s *ImgServerSuite) uploadJPNGToS3(
+	ctx context.Context,
+	path string,
+	bodyPath string,
+	lastModified *time.Time,
+) string {
+	var contentType string
+	switch filepath.Ext(path) {
+	case "jpg":
+		contentType = jpegContentType
+	case "png":
+		contentType = pngContentType
+	default:
+		s.Require().Fail("unknown image type")
+	}
+
+	return s.uploadToS3(
+		ctx,
+		s.env.s3DestKeyBase+"/"+path,
+		bodyPath,
+		contentType,
+		path,
+		lastModified)
+}
+
 func (s *ImgServerSuite) Test_Accepted_S3_EFS() {
 	const path = "dir/image000.jpg"
-	eTag := s.uploadToS3(s.ctx, path, nil)
+	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
@@ -186,7 +249,7 @@ func (s *ImgServerSuite) Test_Accepted_S3_EFS() {
 
 func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
 	const path = "dir/image000.jpg"
-	eTag := s.uploadToS3(s.ctx, path, nil)
+	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -244,7 +307,7 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_NoEFS() {
 
 func (s *ImgServerSuite) Test_Unaccepted_S3_EFS() {
 	const path = "dir/image000.jpg"
-	s.uploadToS3(s.ctx, path, nil)
+	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
 
@@ -266,7 +329,7 @@ func (s *ImgServerSuite) Test_Unaccepted_S3_NoEFS() {
 		longTextLen = int64(1024)
 	)
 
-	s.uploadToS3(s.ctx, path, nil)
+	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
@@ -323,7 +386,7 @@ func (s *ImgServerSuite) Test_Unaccepted_NoS3_NoEFS() {
 
 func (s *ImgServerSuite) Test_Accepted_S3_EFS_Old() {
 	const path = "dir/image000.jpg"
-	eTag := s.uploadToS3(s.ctx, path, &oldModTime)
+	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, &oldModTime)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
