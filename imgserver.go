@@ -404,7 +404,7 @@ func (e *environment) runServer(ctx context.Context, engine *gin.Engine) {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			e.log.Fatal("server finished abnormally", zap.Error(err))
+			e.log.Panic("server finished abnormally", zap.Error(err))
 		}
 	}()
 
@@ -416,7 +416,7 @@ func (e *environment) runServer(ctx context.Context, engine *gin.Engine) {
 		ctx, time.Duration(e.gracefulShutdownTimeout)*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx2); err != nil {
-		e.log.Fatal("server forced to shutdown", zap.Error(err))
+		e.log.Panic("server forced to shutdown", zap.Error(err))
 	}
 }
 
@@ -657,7 +657,7 @@ func (b *efsFileBody) Seek(offset int64, whence int) (int64, error) {
 			b.currOffset = offsetEnd
 			return b.size, nil
 		default:
-			b.log.Fatal("should not be called")
+			b.log.Panic("should not be called")
 		}
 
 	case offsetEnd:
@@ -671,14 +671,14 @@ func (b *efsFileBody) Seek(offset int64, whence int) (int64, error) {
 		case io.SeekCurrent, io.SeekEnd:
 			return seek()
 		default:
-			b.log.Fatal("should not be called")
+			b.log.Panic("should not be called")
 		}
 
 	case offsetUncontrolled:
 		return seek()
 	}
 
-	b.log.Fatal("should not be called")
+	b.log.Panic("should not be called")
 	return 0, nil
 }
 
@@ -704,7 +704,7 @@ func (b *s3Body) Read(p []byte) (n int, err error) {
 		return 0, fmt.Errorf(
 			"reading when offset is end is not permitted in this implementation")
 	}
-	b.log.Fatal("should not be called")
+	b.log.Panic("should not be called")
 	return 0, nil
 }
 
@@ -764,7 +764,7 @@ func (b *s3Body) Seek(offset int64, whence int) (int64, error) {
 			b.currOffset = offsetEnd
 			return b.size, nil
 		default:
-			b.log.Fatal("should not be called")
+			b.log.Panic("should not be called")
 		}
 
 	case offsetEnd:
@@ -778,7 +778,7 @@ func (b *s3Body) Seek(offset int64, whence int) (int64, error) {
 		case io.SeekCurrent, io.SeekEnd:
 			return cueForward(b.size + offset)
 		default:
-			b.log.Fatal("should not be called")
+			b.log.Panic("should not be called")
 		}
 
 	case offsetUncontrolled:
@@ -790,11 +790,11 @@ func (b *s3Body) Seek(offset int64, whence int) (int64, error) {
 		case io.SeekEnd:
 			return cueForward(b.size + offset)
 		default:
-			b.log.Fatal("should not be called")
+			b.log.Panic("should not be called")
 		}
 	}
 
-	b.log.Fatal("should not be called")
+	b.log.Panic("should not be called")
 	return 0, nil
 }
 
