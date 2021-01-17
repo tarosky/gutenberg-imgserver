@@ -433,7 +433,7 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_EFS_BatchSendRepeat() {
 		for i := 0; i < 30; i++ {
 			s.request(ctx, ts, fmt.Sprintf("/dir/image%03d.jpg", i), chromeAcceptHeader)
 		}
-		time.Sleep(time.Second)
+		time.Sleep(3 * time.Second)
 
 		msgs := s.receiveSQSMessages(ctx)
 		s.Assert().Len(msgs, 30)
