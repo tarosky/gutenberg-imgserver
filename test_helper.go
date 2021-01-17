@@ -88,7 +88,7 @@ func getTestConfig(name string) *config {
 		sqsName)
 	efsPath := fmt.Sprintf("work/test/%s/%s", name, generateSafeRandomString())
 
-	return &config{
+	cfg := &config{
 		region:                  region,
 		accessKeyID:             readTestConfig("access-key-id"),
 		secretAccessKey:         readTestConfig("secret-access-key"),
@@ -102,8 +102,11 @@ func getTestConfig(name string) *config {
 		permanentCache:          fmt.Sprintf("public, max-age=%d", 365*24*60*60),
 		gracefulShutdownTimeout: 5,
 		port:                    0, // Not used
-		log:                     createLogger(),
+		logPath:                 efsPath + "/imgserver.log",
+		errorLogPath:            efsPath + "/imgserver-error.log",
 	}
+
+	return cfg
 }
 
 func getTestSQSQueueNameFromURL(url string) string {
@@ -112,24 +115,26 @@ func getTestSQSQueueNameFromURL(url string) string {
 }
 
 func newTestEnvironment(name string, s *TestSuite) *environment {
-	e := newEnvironment(getTestConfig(name))
-
-	sqsName := getTestSQSQueueNameFromURL(e.sqsQueueURL)
-
-	_, err := e.sqsClient.CreateQueueWithContext(s.ctx, &sqs.CreateQueueInput{
-		QueueName: &sqsName,
-	})
-	require.NoError(s.T(), err, "failed to create SQS queue")
+	cfg := getTestConfig(name)
 
 	require.NoError(
 		s.T(),
-		os.RemoveAll(e.efsMountPath),
+		os.RemoveAll(cfg.efsMountPath),
 		"failed to remove directory")
 
 	require.NoError(
 		s.T(),
-		os.MkdirAll(e.efsMountPath, 0755),
+		os.MkdirAll(cfg.efsMountPath, 0755),
 		"failed to create directory")
+
+	log := createLogger(s.ctx, cfg.logPath, cfg.errorLogPath)
+	e := newEnvironment(cfg, log)
+
+	sqsName := getTestSQSQueueNameFromURL(e.sqsQueueURL)
+	_, err := e.sqsClient.CreateQueueWithContext(s.ctx, &sqs.CreateQueueInput{
+		QueueName: &sqsName,
+	})
+	require.NoError(s.T(), err, "failed to create SQS queue")
 
 	return e
 }
