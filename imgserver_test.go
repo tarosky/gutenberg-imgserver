@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -457,4 +459,37 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_EFS_BatchSendWait() {
 
 		s.Assert().Len(s.receiveSQSMessages(ctx), 5)
 	})
+}
+
+func (s *ImgServerSuite) Test_ReopenLogFile() {
+	oldLogPath := s.env.efsMountPath + "/imgserver.log.old"
+	currentLogPath := s.env.efsMountPath + "/imgserver.log"
+
+	s.env.log.Info("first message")
+
+	s.Require().NoError(os.Rename(currentLogPath, oldLogPath))
+
+	s.env.log.Info("second message")
+
+	p, err := os.FindProcess(os.Getpid())
+	s.Require().NoError(err)
+	s.Require().NoError(p.Signal(syscall.SIGUSR1)) // Reopen log files
+
+	time.Sleep(time.Second)
+
+	s.env.log.Info("third message")
+
+	oldBytes, err := ioutil.ReadFile(oldLogPath)
+	s.Require().NoError(err)
+
+	currentBytes, err := ioutil.ReadFile(currentLogPath)
+	s.Require().NoError(err)
+
+	oldLog := string(oldBytes)
+	currentLog := string(currentBytes)
+
+	s.Assert().Contains(oldLog, "first")
+	s.Assert().Contains(oldLog, "second")
+
+	s.Assert().Contains(currentLog, "third")
 }

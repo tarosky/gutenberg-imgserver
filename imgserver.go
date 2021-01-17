@@ -60,7 +60,9 @@ type config struct {
 	permanentCache          string
 	gracefulShutdownTimeout uint
 	port                    int
-	log                     *zap.Logger
+	logPath                 string
+	errorLogPath            string
+	// log                     *zap.Logger
 }
 
 // Environment holds values needed to execute the entire program.
@@ -72,34 +74,110 @@ type environment struct {
 	log        *zap.Logger
 }
 
-func createLogger() *zap.Logger {
-	config := &zap.Config{
-		Level:            zap.NewAtomicLevelAt(zap.DebugLevel),
-		Development:      true,
-		Encoding:         "json",
-		OutputPaths:      []string{"stderr"},
-		ErrorOutputPaths: []string{"stderr"},
-		EncoderConfig: zapcore.EncoderConfig{
-			TimeKey:        "time",
-			LevelKey:       "level",
-			NameKey:        zapcore.OmitKey,
-			CallerKey:      zapcore.OmitKey,
-			FunctionKey:    zapcore.OmitKey,
-			MessageKey:     "message",
-			StacktraceKey:  zapcore.OmitKey,
-			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    zapcore.CapitalLevelEncoder,
-			EncodeTime:     zapcore.ISO8601TimeEncoder,
-			EncodeDuration: zapcore.StringDurationEncoder,
-			EncodeCaller:   zapcore.ShortCallerEncoder,
-		},
-	}
-	log, err := config.Build(zap.WithCaller(false))
+// This implements zapcore.WriteSyncer interface.
+type lockedFileWriteSyncer struct {
+	m    sync.Mutex
+	f    *os.File
+	path string
+}
+
+func newLockedFileWriteSyncer(path string) *lockedFileWriteSyncer {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
 	if err != nil {
-		panic("failed to initialize logger")
+		fmt.Fprintf(os.Stderr, "error while creating log file: path: %s", err.Error())
+		panic(err)
 	}
 
-	return log
+	return &lockedFileWriteSyncer{
+		f:    f,
+		path: path,
+	}
+}
+
+func (s *lockedFileWriteSyncer) Write(bs []byte) (int, error) {
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	return s.f.Write(bs)
+}
+
+func (s *lockedFileWriteSyncer) Sync() error {
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	return s.f.Sync()
+}
+
+func (s *lockedFileWriteSyncer) reopen() {
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	if err := s.f.Close(); err != nil {
+		fmt.Fprintf(
+			os.Stderr, "error while reopening file: path: %s, err: %s", s.path, err.Error())
+	}
+
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
+	if err != nil {
+		fmt.Fprintf(
+			os.Stderr, "error while reopening file: path: %s, err: %s", s.path, err.Error())
+		panic(err)
+	}
+
+	s.f = f
+}
+
+func (s *lockedFileWriteSyncer) Close() error {
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	return s.f.Close()
+}
+
+func createLogger(ctx context.Context, logPath, errorLogPath string) *zap.Logger {
+	enc := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        zapcore.OmitKey,
+		CallerKey:      zapcore.OmitKey,
+		FunctionKey:    zapcore.OmitKey,
+		MessageKey:     "message",
+		StacktraceKey:  zapcore.OmitKey,
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.CapitalLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	})
+
+	out := newLockedFileWriteSyncer(logPath)
+	errOut := newLockedFileWriteSyncer(errorLogPath)
+
+	sigusr1Ch := make(chan os.Signal)
+	signal.Notify(sigusr1Ch, syscall.SIGUSR1)
+
+	go func() {
+		for {
+			select {
+			case _, ok := <-sigusr1Ch:
+				if !ok {
+					break
+				}
+				out.reopen()
+				errOut.reopen()
+			case <-ctx.Done():
+				signal.Stop(sigusr1Ch)
+				close(sigusr1Ch)
+				break
+			}
+		}
+	}()
+
+	return zap.New(
+		zapcore.NewCore(enc, out, zap.NewAtomicLevelAt(zap.DebugLevel)),
+		zap.ErrorOutput(errOut),
+		zap.Development(),
+		zap.WithCaller(false))
 }
 
 func main() {
@@ -162,11 +240,36 @@ func main() {
 			Aliases: []string{"p"},
 			Value:   8080,
 		},
+		&cli.StringFlag{
+			Name:     "log-path",
+			Aliases:  []string{"l"},
+			Required: true,
+		},
+		&cli.StringFlag{
+			Name:     "error-log-path",
+			Aliases:  []string{"el"},
+			Required: true,
+		},
 	}
 
 	app.Action = func(c *cli.Context) error {
-		log := createLogger()
-		defer log.Sync()
+		efsMouthPath, err := filepath.Abs(c.String("efs-mount-path"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to get efs-mount-path: %s", err.Error())
+			panic(err)
+		}
+
+		logPath, err := filepath.Abs(c.String("log-path"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to get log-path: %s", err.Error())
+			panic(err)
+		}
+
+		errorLogPath, err := filepath.Abs(c.String("error-log-path"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to get error-log-path: %s", err.Error())
+			panic(err)
+		}
 
 		cfg := &config{
 			region:                  c.String("region"),
@@ -175,22 +278,39 @@ func main() {
 			s3DestKeyBase:           c.String("s3-dest-key-base"),
 			sqsQueueURL:             c.String("sqs-queue-url"),
 			sqsBatchWaitTime:        c.Uint("sqs-batch-wait-time"),
-			efsMountPath:            c.String("efs-mount-path"),
+			efsMountPath:            efsMouthPath,
 			temporaryCache:          fmt.Sprintf("public, max-age=%d", c.Uint("temp-resp-max-age")),
 			permanentCache:          fmt.Sprintf("public, max-age=%d", c.Uint("perm-resp-max-age")),
 			gracefulShutdownTimeout: c.Uint("graceful-shutdown-timeout"),
 			port:                    c.Int("port"),
-			log:                     createLogger(),
+			logPath:                 logPath,
+			errorLogPath:            errorLogPath,
 		}
+		log := createLogger(c.Context, cfg.logPath, cfg.errorLogPath)
+		defer log.Sync()
 
 		gin.SetMode(gin.ReleaseMode)
-		e := newEnvironment(cfg)
+		e := newEnvironment(cfg, log)
 		e.run(c.Context, e.runServer)
 
 		return nil
 	}
 
-	err := app.Run(os.Args)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sigCh := make(chan os.Signal)
+	signal.Notify(sigCh, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGQUIT)
+	go func() {
+		defer func() {
+			signal.Stop(sigCh)
+			close(sigCh)
+		}()
+
+		<-sigCh
+		cancel()
+	}()
+
+	err := app.RunContext(ctx, os.Args)
 	if err != nil {
 		panic(err)
 	}
@@ -265,14 +385,14 @@ func createAWSSession(cfg *config) *session.Session {
 	return session.Must(session.NewSession(c))
 }
 
-func newEnvironment(cfg *config) *environment {
+func newEnvironment(cfg *config, log *zap.Logger) *environment {
 	awsSession := createAWSSession(cfg)
 	return &environment{
 		config:     *cfg,
 		awsSession: awsSession,
 		s3Client:   s3.New(awsSession),
 		sqsClient:  sqs.New(awsSession),
-		log:        cfg.log,
+		log:        log,
 	}
 }
 
