@@ -200,7 +200,7 @@ func (s *ImgServerSuite) uploadToS3(
 	})
 	s.Require().NoError(err)
 
-	return quoteETag(*res.ETag)
+	return *res.ETag
 }
 
 func (s *ImgServerSuite) uploadWebPToS3(
@@ -257,6 +257,9 @@ func (s *ImgServerSuite) Test_Accepted_S3_EFS() {
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertNoSQSMessage(ctx)
 		s.assertS3SrcNotExists(ctx, path)
@@ -278,6 +281,9 @@ func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
 		s.assertS3SrcNotExists(ctx, path)
@@ -296,6 +302,9 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_EFS() {
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
 		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
@@ -318,6 +327,9 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertNoSQSMessage(ctx)
 		s.assertS3SrcNotExists(ctx, path)
@@ -337,6 +349,9 @@ func (s *ImgServerSuite) Test_Unaccepted_S3_EFS() {
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertNoSQSMessage(ctx)
 		s.assertS3SrcNotExists(ctx, path)
@@ -361,6 +376,9 @@ func (s *ImgServerSuite) Test_Unaccepted_S3_NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
 		s.assertS3SrcNotExists(ctx, path)
@@ -379,6 +397,9 @@ func (s *ImgServerSuite) Test_Unaccepted_NoS3_EFS() {
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
 		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
@@ -401,6 +422,9 @@ func (s *ImgServerSuite) Test_Unaccepted_NoS3_NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertNoSQSMessage(ctx)
 		s.assertS3SrcNotExists(ctx, path)
@@ -421,6 +445,9 @@ func (s *ImgServerSuite) Test_Accepted_S3_EFS_Old() {
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(oldLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 
 		// Send message to update S3 object
 		s.assertDelayedSQSMessage(ctx, path)

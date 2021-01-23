@@ -403,6 +403,7 @@ func (e *environment) runServer(ctx context.Context, engine *gin.Engine) {
 	}
 
 	go func() {
+		e.log.Info("server started")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			e.log.Panic("server finished abnormally", zap.Error(err))
 		}
@@ -695,11 +696,8 @@ func (b *s3Body) Read(p []byte) (n int, err error) {
 	case offsetStart, offsetUncontrolled:
 		b.currOffset = offsetUncontrolled
 		n, err := b.body.Read(p)
-		if err != nil {
-			return 0, err
-		}
 		b.pos += int64(n)
-		return n, nil
+		return n, err
 	case offsetEnd:
 		return 0, fmt.Errorf(
 			"reading when offset is end is not permitted in this implementation")
@@ -716,6 +714,7 @@ func (b *s3Body) Close() error {
 }
 
 func (b *s3Body) Seek(offset int64, whence int) (int64, error) {
+	b.log.Debug("seek called", zap.Int64("offset", offset), zap.Int("whence", whence))
 	cueForward := func(offset int64) (int64, error) {
 		b.log.Debug("cueForward called",
 			zap.Int64("offset", offset),
@@ -739,14 +738,13 @@ func (b *s3Body) Seek(offset int64, whence int) (int64, error) {
 
 			l, err := b.body.Read(buf)
 			b.pos += int64(l)
+			remaining -= int64(l)
 			if err != nil {
 				if err == io.EOF {
 					return offset - remaining, nil
 				}
 				return 0, err
 			}
-
-			remaining -= int64(l)
 		}
 
 		return offset, nil
@@ -879,7 +877,7 @@ func (e *environment) checkWebPStatus(ctx context.Context, s3Key string, webPSta
 		return
 	}
 
-	if ts := res.Metadata["Original-Timestamp"]; ts != nil {
+	if ts := res.Metadata[timestampMetadata]; ts != nil {
 		t, err := time.Parse(time.RFC3339Nano, *ts)
 		if err != nil {
 			e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
@@ -889,7 +887,7 @@ func (e *environment) checkWebPStatus(ctx context.Context, s3Key string, webPSta
 
 		webPStatusCh <- &s3ImageStatus{
 			time: &t,
-			eTag: quoteETag(*res.ETag),
+			eTag: *res.ETag,
 		}
 		return
 	}
@@ -951,7 +949,7 @@ func (e *environment) getWebPReader(ctx context.Context, s3Key string, webPStatu
 		return
 	}
 
-	if ts := res.Metadata["Original-Timestamp"]; ts != nil {
+	if ts := res.Metadata[timestampMetadata]; ts != nil {
 		t, err := time.Parse(time.RFC3339Nano, *ts)
 		if err != nil {
 			e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
@@ -963,7 +961,7 @@ func (e *environment) getWebPReader(ctx context.Context, s3Key string, webPStatu
 
 		webPStatusCh <- &s3ImageData{
 			s3ImageStatus: s3ImageStatus{
-				eTag: quoteETag(*res.ETag),
+				eTag: *res.ETag,
 				time: &t,
 			},
 			contentLength: *res.ContentLength,
@@ -1124,14 +1122,18 @@ func (e *environment) handleJPNGRequest(c *gin.Context, fpath *filePath, taskCh 
 }
 
 func (e *environment) respondWithInternalServerErrorText(c *gin.Context) {
+	const message = "internal server error"
 	c.Writer.Header().Set(cacheControlHeader, e.temporaryCache)
-	c.String(http.StatusInternalServerError, "internal server error")
+	c.Writer.Header().Set(contentLengthHeader, strconv.Itoa(len(message)))
+	c.String(http.StatusInternalServerError, message)
 	c.Writer.Flush()
 }
 
 func (e *environment) respondWithNotFoundText(c *gin.Context) {
+	const message = "file not found"
 	c.Writer.Header().Set(cacheControlHeader, e.temporaryCache)
-	c.String(http.StatusNotFound, "file not found")
+	c.Writer.Header().Set(contentLengthHeader, strconv.Itoa(len(message)))
+	c.String(http.StatusNotFound, message)
 	c.Writer.Flush()
 }
 
@@ -1155,7 +1157,6 @@ func (e *environment) respondTemporarily(
 	jpngStatus *efsImageStatus,
 	jpngReader *efsImageReader,
 ) {
-
 	if jpngReader.err != nil || jpngStatus.err != nil {
 		e.respondWithInternalServerErrorText(c)
 	} else if jpngReader.reader == nil || jpngStatus.time == nil {
