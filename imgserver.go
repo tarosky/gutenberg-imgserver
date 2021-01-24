@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/signal"
@@ -62,7 +63,7 @@ type config struct {
 	port                    int
 	logPath                 string
 	errorLogPath            string
-	// log                     *zap.Logger
+	pidFile                 string
 }
 
 // Environment holds values needed to execute the entire program.
@@ -250,6 +251,10 @@ func main() {
 			Aliases:  []string{"el"},
 			Required: true,
 		},
+		&cli.StringFlag{
+			Name:    "pid-file",
+			Aliases: []string{"i"},
+		},
 	}
 
 	app.Action = func(c *cli.Context) error {
@@ -285,9 +290,29 @@ func main() {
 			port:                    c.Int("port"),
 			logPath:                 logPath,
 			errorLogPath:            errorLogPath,
+			pidFile:                 c.String("pid-file"),
 		}
 		log := createLogger(c.Context, cfg.logPath, cfg.errorLogPath)
 		defer log.Sync()
+
+		if cfg.pidFile != "" {
+			pid := []byte(strconv.Itoa(os.Getpid()))
+			if err := ioutil.WriteFile(cfg.pidFile, pid, 0644); err != nil {
+				log.Panic(
+					"failed to create PID file",
+					zap.String("path", cfg.pidFile),
+					zap.Error(err))
+			}
+
+			defer func() {
+				if err := os.Remove(cfg.pidFile); err != nil {
+					log.Error(
+						"failed to remove PID file",
+						zap.String("path", cfg.pidFile),
+						zap.Error(err))
+				}
+			}()
+		}
 
 		gin.SetMode(gin.ReleaseMode)
 		e := newEnvironment(cfg, log)
