@@ -154,21 +154,21 @@ func createLogger(ctx context.Context, logPath, errorLogPath string) *zap.Logger
 	out := newLockedFileWriteSyncer(logPath)
 	errOut := newLockedFileWriteSyncer(errorLogPath)
 
-	sigusr1Ch := make(chan os.Signal)
-	signal.Notify(sigusr1Ch, syscall.SIGUSR1)
+	sigusr1 := make(chan os.Signal, 1)
+	signal.Notify(sigusr1, syscall.SIGUSR1)
 
 	go func() {
 		for {
 			select {
-			case _, ok := <-sigusr1Ch:
+			case _, ok := <-sigusr1:
 				if !ok {
 					break
 				}
 				out.reopen()
 				errOut.reopen()
 			case <-ctx.Done():
-				signal.Stop(sigusr1Ch)
-				close(sigusr1Ch)
+				signal.Stop(sigusr1)
+				// closing sigusr1 causes panic (close of closed channel)
 				break
 			}
 		}
@@ -323,15 +323,12 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	sigCh := make(chan os.Signal)
-	signal.Notify(sigCh, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGQUIT)
+	sigkill := make(chan os.Signal)
+	signal.Notify(sigkill, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGQUIT)
 	go func() {
-		defer func() {
-			signal.Stop(sigCh)
-			close(sigCh)
-		}()
-
-		<-sigCh
+		<-sigkill
+		signal.Stop(sigkill)
+		close(sigkill)
 		cancel()
 	}()
 
@@ -434,12 +431,10 @@ func (e *environment) runServer(ctx context.Context, engine *gin.Engine) {
 		}
 	}()
 
-	quit := make(chan os.Signal)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-ctx.Done()
 
 	ctx2, cancel := context.WithTimeout(
-		ctx, time.Duration(e.gracefulShutdownTimeout)*time.Second)
+		context.Background(), time.Duration(e.gracefulShutdownTimeout)*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx2); err != nil {
 		e.log.Panic("server forced to shutdown", zap.Error(err))
@@ -1088,7 +1083,10 @@ func (e *environment) ensureWebPUpdated(
 	// Do nothing and just add task when the file was deleted from EFS.
 	// The task will delete the corresponding WebP file when no source image exists.
 
-	taskCh <- &task{Path: fpath.sqs}
+	select {
+	case taskCh <- &task{Path: fpath.sqs}:
+	case <-ctx.Done():
+	}
 }
 
 func (e *environment) respondWithEFSFile(
