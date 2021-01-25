@@ -662,10 +662,6 @@ func (b *efsFileBody) Close() error {
 func (b *efsFileBody) Seek(offset int64, whence int) (int64, error) {
 	seek := func() (int64, error) {
 		b.currOffset = offsetUncontrolled
-		b.log.Debug("seek called",
-			zap.Int64("offset", offset),
-			zap.Int("whence", whence),
-			zap.Int64("size", b.size))
 		return b.Seek(offset, whence)
 	}
 
@@ -734,7 +730,6 @@ func (b *s3Body) Close() error {
 }
 
 func (b *s3Body) Seek(offset int64, whence int) (int64, error) {
-	b.log.Debug("seek called", zap.Int64("offset", offset), zap.Int("whence", whence))
 	cueForward := func(offset int64) (int64, error) {
 		b.log.Debug("cueForward called",
 			zap.Int64("offset", offset),
