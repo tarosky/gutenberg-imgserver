@@ -226,7 +226,7 @@ func (s *ImgServerSuite) uploadJPNGToS3(
 ) string {
 	var contentType string
 	switch filepath.Ext(path) {
-	case ".jpg":
+	case ".jpg", ".jpeg":
 		contentType = jpegContentType
 	case ".png":
 		contentType = pngContentType
@@ -236,7 +236,7 @@ func (s *ImgServerSuite) uploadJPNGToS3(
 
 	return s.uploadToS3(
 		ctx,
-		s.env.s3DestKeyBase+"/"+path,
+		s.env.s3SrcKeyBase+"/"+path,
 		bodyPath,
 		contentType,
 		path,
@@ -269,6 +269,7 @@ func (s *ImgServerSuite) Test_Accepted_S3_EFS() {
 func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
 	const path = "dir/image000.jpg"
 	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
+	s.uploadJPNGToS3(s.ctx, path, sampleJPEG, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -286,6 +287,7 @@ func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
 		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
+		// Ensure source file on S3 is also removed
 		s.assertS3SrcNotExists(ctx, path)
 	})
 }

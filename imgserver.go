@@ -1079,9 +1079,15 @@ func (e *environment) ensureWebPUpdated(
 				zapPathField, zap.Error(err), zap.String("s3key", fpath.s3JPNG))
 			return
 		}
+	} else {
+		if _, err := e.s3Client.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
+			Bucket: &e.s3Bucket,
+			Key:    &fpath.s3JPNG,
+		}); err != nil {
+			e.log.Error("failed to DELETE S3 source image", zapPathField, zap.Error(err))
+			return
+		}
 	}
-	// Do nothing and just add task when the file was deleted from EFS.
-	// The task will delete the corresponding WebP file when no source image exists.
 
 	select {
 	case taskCh <- &task{Path: fpath.sqs}:
