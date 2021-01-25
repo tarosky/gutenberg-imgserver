@@ -1055,7 +1055,7 @@ func (e *environment) ensureWebPUpdated(
 		// PUT the latest image file for processing.
 		var contentType string
 		switch filepath.Ext(fpath.s3JPNG) {
-		case ".jpg":
+		case ".jpg", ".jpeg":
 			contentType = jpegContentType
 		case ".png":
 			contentType = pngContentType
