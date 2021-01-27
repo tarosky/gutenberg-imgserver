@@ -835,162 +835,202 @@ func quoteETag(eTag string) string {
 }
 
 // JPNG stands for JPEG/PNG.
-func (e *environment) checkJPNGStatus(efsPath string, jpngStatusCh chan<- *efsImageStatus) {
-	defer close(jpngStatusCh)
-
-	zapPathField := zap.String("path", efsPath)
-
-	stat, err := os.Stat(efsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			e.log.Debug("stat: image file not found", zapPathField)
-			jpngStatusCh <- &efsImageStatus{}
-			return
-		}
-		e.log.Error("failed to stat file", zapPathField, zap.Error(err))
-		jpngStatusCh <- &efsImageStatus{err: err}
-		return
+func (e *environment) checkJPNGStatus(efsPath string) *efsImageStatusFuture {
+	jpngStatusCh := make(chan *efsImageStatus)
+	fut := &efsImageStatusFuture{
+		ch: jpngStatusCh,
 	}
 
-	s := stat.Size()
-	t := stat.ModTime().UTC()
-	eTag := quoteETag(fmt.Sprintf("%x-%x", t.UnixNano(), s))
+	go func() {
+		defer close(jpngStatusCh)
 
-	jpngStatusCh <- &efsImageStatus{
-		time: &t,
-		eTag: eTag,
-		size: s,
-	}
-}
+		zapPathField := zap.String("path", efsPath)
 
-func (e *environment) checkWebPStatus(ctx context.Context, s3Key string, webPStatusCh chan<- *s3ImageStatus) {
-	defer close(webPStatusCh)
-
-	s3KeyField := zap.String("key", s3Key)
-
-	res, err := e.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
-		Bucket: &e.s3Bucket,
-		Key:    &s3Key,
-	})
-	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok {
-			if awsErr.Code() == s3ErrCodeNotFound {
-				webPStatusCh <- &s3ImageStatus{}
+		stat, err := os.Stat(efsPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				e.log.Debug("stat: image file not found", zapPathField)
+				jpngStatusCh <- &efsImageStatus{}
 				return
 			}
-
-			e.log.Error("failed to HEAD object",
-				s3KeyField,
-				zap.String("aws-code", awsErr.Code()),
-				zap.String("aws-message", awsErr.Message()))
-			webPStatusCh <- &s3ImageStatus{err: err}
+			e.log.Error("failed to stat file", zapPathField, zap.Error(err))
+			jpngStatusCh <- &efsImageStatus{err: err}
 			return
 		}
 
-		e.log.Error("failed to connect to AWS", s3KeyField, zap.Error(err))
-		webPStatusCh <- &s3ImageStatus{err: err}
-		return
-	}
+		s := stat.Size()
+		t := stat.ModTime().UTC()
+		eTag := quoteETag(fmt.Sprintf("%x-%x", t.UnixNano(), s))
 
-	if ts := res.Metadata[timestampMetadata]; ts != nil {
-		t, err := time.Parse(time.RFC3339Nano, *ts)
-		if err != nil {
-			e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
-			webPStatusCh <- &s3ImageStatus{err: err}
-			return
-		}
-
-		webPStatusCh <- &s3ImageStatus{
+		jpngStatusCh <- &efsImageStatus{
 			time: &t,
-			eTag: *res.ETag,
+			eTag: eTag,
+			size: s,
 		}
-		return
-	}
+	}()
 
-	e.log.Error("timestamp not found", s3KeyField)
-	webPStatusCh <- nil
+	return fut
 }
 
-func (e *environment) getJPNGReader(ctx context.Context, efsPath string, readerCh chan<- *efsImageReader) {
-	defer close(readerCh)
-
-	zapPathField := zap.String("path", efsPath)
-
-	f, err := os.Open(efsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			e.log.Debug("open: image file not found", zapPathField)
-			readerCh <- &efsImageReader{}
-			return
-		}
-		e.log.Error("failed to open file", zapPathField, zap.Error(err))
-		readerCh <- &efsImageReader{err: err}
-		return
+func (e *environment) checkWebPStatus(ctx context.Context, s3Key string) *s3ImageStatusFuture {
+	webPStatusCh := make(chan *s3ImageStatus)
+	fut := &s3ImageStatusFuture{
+		ch: webPStatusCh,
 	}
 
-	readerCh <- &efsImageReader{reader: f}
-}
+	go func() {
+		defer close(webPStatusCh)
 
-func (e *environment) getWebPReader(ctx context.Context, s3Key string, webPStatusCh chan<- *s3ImageData) {
-	defer close(webPStatusCh)
+		s3KeyField := zap.String("key", s3Key)
 
-	s3KeyField := zap.String("key", s3Key)
+		res, err := e.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+			Bucket: &e.s3Bucket,
+			Key:    &s3Key,
+		})
+		if err != nil {
+			if awsErr, ok := err.(awserr.Error); ok {
+				if awsErr.Code() == s3ErrCodeNotFound {
+					webPStatusCh <- &s3ImageStatus{}
+					return
+				}
 
-	res, err := e.s3Client.GetObjectWithContext(ctx, &s3.GetObjectInput{
-		Bucket: &e.s3Bucket,
-		Key:    &s3Key,
-	})
-	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok {
-			if awsErr.Code() == s3.ErrCodeNoSuchKey {
-				webPStatusCh <- &s3ImageData{}
+				e.log.Error("failed to HEAD object",
+					s3KeyField,
+					zap.String("aws-code", awsErr.Code()),
+					zap.String("aws-message", awsErr.Message()))
+				webPStatusCh <- &s3ImageStatus{err: err}
 				return
 			}
 
-			e.log.Error("failed to GET object",
-				s3KeyField,
-				zap.String("aws-code", awsErr.Code()),
-				zap.String("aws-message", awsErr.Message()))
-			webPStatusCh <- &s3ImageData{
-				s3ImageStatus: s3ImageStatus{err: err},
-			}
+			e.log.Error("failed to connect to AWS", s3KeyField, zap.Error(err))
+			webPStatusCh <- &s3ImageStatus{err: err}
 			return
 		}
 
-		e.log.Error("failed to connect to AWS", s3KeyField, zap.Error(err))
-		webPStatusCh <- &s3ImageData{
-			s3ImageStatus: s3ImageStatus{err: err},
-		}
-		return
-	}
-
-	if ts := res.Metadata[timestampMetadata]; ts != nil {
-		t, err := time.Parse(time.RFC3339Nano, *ts)
-		if err != nil {
-			e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
-			webPStatusCh <- &s3ImageData{
-				s3ImageStatus: s3ImageStatus{err: err},
+		if ts := res.Metadata[timestampMetadata]; ts != nil {
+			t, err := time.Parse(time.RFC3339Nano, *ts)
+			if err != nil {
+				e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
+				webPStatusCh <- &s3ImageStatus{err: err}
+				return
 			}
-			return
-		}
 
-		webPStatusCh <- &s3ImageData{
-			s3ImageStatus: s3ImageStatus{
-				eTag: *res.ETag,
+			webPStatusCh <- &s3ImageStatus{
 				time: &t,
-			},
-			contentLength: *res.ContentLength,
-			reader: &s3Body{
-				body: res.Body,
-				size: *res.ContentLength,
-				log:  e.log,
-			},
+				eTag: *res.ETag,
+			}
+			return
 		}
-		return
+
+		e.log.Error("timestamp not found", s3KeyField)
+		webPStatusCh <- &s3ImageStatus{
+			err: fmt.Errorf("no timestamp: %s", s3Key),
+		}
+	}()
+
+	return fut
+}
+
+func (e *environment) getJPNGReader(ctx context.Context, efsPath string) *efsImageReaderFuture {
+	readerCh := make(chan *efsImageReader)
+	fut := &efsImageReaderFuture{
+		ch: readerCh,
 	}
 
-	e.log.Error("timestamp not found", s3KeyField)
-	webPStatusCh <- nil
+	go func() {
+		defer close(readerCh)
+
+		zapPathField := zap.String("path", efsPath)
+
+		f, err := os.Open(efsPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				e.log.Debug("open: image file not found", zapPathField)
+				readerCh <- &efsImageReader{}
+				return
+			}
+			e.log.Error("failed to open file", zapPathField, zap.Error(err))
+			readerCh <- &efsImageReader{err: err}
+			return
+		}
+
+		readerCh <- &efsImageReader{reader: f}
+	}()
+
+	return fut
+}
+
+func (e *environment) getWebPReader(ctx context.Context, s3Key string) *s3ImageDataFuture {
+	webPStatusCh := make(chan *s3ImageData)
+	fut := &s3ImageDataFuture{
+		ch: webPStatusCh,
+	}
+
+	go func() {
+		defer close(webPStatusCh)
+
+		s3KeyField := zap.String("key", s3Key)
+
+		res, err := e.s3Client.GetObjectWithContext(ctx, &s3.GetObjectInput{
+			Bucket: &e.s3Bucket,
+			Key:    &s3Key,
+		})
+		if err != nil {
+			if awsErr, ok := err.(awserr.Error); ok {
+				if awsErr.Code() == s3.ErrCodeNoSuchKey {
+					webPStatusCh <- &s3ImageData{}
+					return
+				}
+
+				e.log.Error("failed to GET object",
+					s3KeyField,
+					zap.String("aws-code", awsErr.Code()),
+					zap.String("aws-message", awsErr.Message()))
+				webPStatusCh <- &s3ImageData{
+					s3ImageStatus: s3ImageStatus{err: err},
+				}
+				return
+			}
+
+			e.log.Error("failed to connect to AWS", s3KeyField, zap.Error(err))
+			webPStatusCh <- &s3ImageData{
+				s3ImageStatus: s3ImageStatus{err: err},
+			}
+			return
+		}
+
+		if ts := res.Metadata[timestampMetadata]; ts != nil {
+			t, err := time.Parse(time.RFC3339Nano, *ts)
+			if err != nil {
+				e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
+				webPStatusCh <- &s3ImageData{
+					s3ImageStatus: s3ImageStatus{err: err},
+				}
+				return
+			}
+
+			webPStatusCh <- &s3ImageData{
+				s3ImageStatus: s3ImageStatus{
+					eTag: *res.ETag,
+					time: &t,
+				},
+				contentLength: *res.ContentLength,
+				reader: &s3Body{
+					body: res.Body,
+					size: *res.ContentLength,
+					log:  e.log,
+				},
+			}
+			return
+		}
+
+		e.log.Error("timestamp not found", s3KeyField)
+		webPStatusCh <- &s3ImageData{
+			s3ImageStatus: s3ImageStatus{err: fmt.Errorf("no timestamp: %s", s3Key)},
+		}
+	}()
+
+	return fut
 }
 
 type filePath struct {
@@ -1002,11 +1042,59 @@ type filePath struct {
 	name   string
 }
 
+type efsImageStatusFuture struct {
+	data *efsImageStatus
+	ch   <-chan *efsImageStatus
+}
+
+func (f *efsImageStatusFuture) get() *efsImageStatus {
+	if f.data == nil {
+		f.data = <-f.ch
+	}
+	return f.data
+}
+
+type s3ImageStatusFuture struct {
+	data *s3ImageStatus
+	ch   <-chan *s3ImageStatus
+}
+
+func (f *s3ImageStatusFuture) get() *s3ImageStatus {
+	if f.data == nil {
+		f.data = <-f.ch
+	}
+	return f.data
+}
+
+type efsImageReaderFuture struct {
+	data *efsImageReader
+	ch   <-chan *efsImageReader
+}
+
+func (f *efsImageReaderFuture) get() *efsImageReader {
+	if f.data == nil {
+		f.data = <-f.ch
+	}
+	return f.data
+}
+
+type s3ImageDataFuture struct {
+	data *s3ImageData
+	ch   <-chan *s3ImageData
+}
+
+func (f *s3ImageDataFuture) get() *s3ImageData {
+	if f.data == nil {
+		f.data = <-f.ch
+	}
+	return f.data
+}
+
 func (e *environment) ensureWebPUpdated(
 	ctx context.Context,
-	jpngStatus *efsImageStatus,
-	webPStatus *s3ImageStatus,
-	jpngReader *efsImageReader,
+	jpngStatusFut *efsImageStatusFuture,
+	webPStatusFut *s3ImageStatusFuture,
+	jpngReaderFut *efsImageReaderFuture,
 	fpath *filePath,
 	taskCh chan<- *task,
 ) {
@@ -1016,37 +1104,37 @@ func (e *environment) ensureWebPUpdated(
 	// The principle is that never change file if error occurs.
 	//
 
-	if jpngStatus.err != nil || webPStatus.err != nil {
+	if jpngStatusFut.get().err != nil || webPStatusFut.get().err != nil {
 		return
 	}
 
 	// Do nothing since the both files don't exist.
-	if jpngStatus.time == nil && webPStatus.time == nil {
+	if jpngStatusFut.get().time == nil && webPStatusFut.get().time == nil {
 		return
 	}
 
-	if jpngStatus.time != nil && webPStatus.time != nil && jpngStatus.time.Equal(*webPStatus.time) {
+	if jpngStatusFut.get().time != nil &&
+		webPStatusFut.get().time != nil &&
+		jpngStatusFut.get().time.Equal(*webPStatusFut.get().time) {
 		return
 	}
 
-	if jpngReader == nil {
-		jpngReaderCh := make(chan *efsImageReader)
-		go e.getJPNGReader(ctx, fpath.efs, jpngReaderCh)
-		jpngReader = <-jpngReaderCh
+	if jpngReaderFut == nil {
+		jpngReaderFut = e.getJPNGReader(ctx, fpath.efs)
 		defer func() {
-			if err := jpngReader.Close(); err != nil {
+			if err := jpngReaderFut.get().Close(); err != nil {
 				e.log.Error("failed to close EFS file", zapPathField, zap.Error(err))
 			}
 		}()
 	} else {
-		jpngReader.Seek(0, io.SeekStart)
+		jpngReaderFut.get().Seek(0, io.SeekStart)
 	}
 
-	if jpngReader.err != nil {
+	if jpngReaderFut.get().err != nil {
 		return
 	}
 
-	if jpngReader.reader != nil && jpngStatus.time != nil {
+	if jpngReaderFut.get().reader != nil && jpngStatusFut.get().time != nil {
 		// PUT the latest image file for processing.
 		var contentType string
 		switch filepath.Ext(fpath.s3JPNG) {
@@ -1059,11 +1147,11 @@ func (e *environment) ensureWebPUpdated(
 			return
 		}
 
-		tsStr := jpngStatus.time.Format(time.RFC3339Nano)
+		tsStr := jpngStatusFut.get().time.Format(time.RFC3339Nano)
 		if _, err := e.s3Client.PutObjectWithContext(ctx, &s3.PutObjectInput{
 			Bucket:      &e.s3Bucket,
 			Key:         &fpath.s3JPNG,
-			Body:        jpngReader.reader,
+			Body:        jpngReaderFut.get().reader,
 			ContentType: &contentType,
 			Metadata: map[string]*string{
 				pathMetadata:      &fpath.path,
@@ -1093,56 +1181,52 @@ func (e *environment) ensureWebPUpdated(
 func (e *environment) respondWithEFSFile(
 	c *gin.Context,
 	fpath *filePath,
-	status *efsImageStatus,
-	reader *efsImageReader,
+	statusFut *efsImageStatusFuture,
+	readerFut *efsImageReaderFuture,
 	cache string,
 ) {
-	if reader.err != nil {
+	if readerFut.get().err != nil {
 		c.String(http.StatusInternalServerError, "failed to handle request")
 		return
 	}
 	body := &efsFileBody{
-		body: reader.reader,
-		size: status.size,
+		body: readerFut.get().reader,
+		size: statusFut.get().size,
 		log:  e.log,
 	}
 
 	c.Writer.Header().Set(cacheControlHeader, cache)
-	c.Writer.Header().Set(eTagHeader, status.eTag)
-	http.ServeContent(c.Writer, c.Request, fpath.name, *status.time, body)
+	c.Writer.Header().Set(eTagHeader, statusFut.get().eTag)
+	http.ServeContent(c.Writer, c.Request, fpath.name, *statusFut.get().time, body)
 	c.Writer.Flush()
 }
 
 func (e *environment) handleJPNGRequest(c *gin.Context, fpath *filePath, taskCh chan<- *task) {
-	jpngReaderCh := make(chan *efsImageReader)
-	jpngStatusCh := make(chan *efsImageStatus)
-	webPStatusCh := make(chan *s3ImageStatus)
-
-	go e.checkJPNGStatus(fpath.efs, jpngStatusCh)
-	go e.getJPNGReader(c, fpath.efs, jpngReaderCh)
-	go e.checkWebPStatus(c, fpath.s3WebP, webPStatusCh)
-
-	jpngStatus := <-jpngStatusCh
-	jpngReader := <-jpngReaderCh
+	jpngStatusFut := e.checkJPNGStatus(fpath.efs)
+	jpngReaderFut := e.getJPNGReader(c, fpath.efs)
+	webPStatusFut := e.checkWebPStatus(c, fpath.s3WebP)
+	defer func() {
+		// Ensure each goroutine is finished.
+		jpngStatusFut.get()
+		jpngReaderFut.get()
+		webPStatusFut.get()
+	}()
 
 	defer func() {
-		if err := jpngReader.Close(); err != nil {
+		if err := jpngReaderFut.get().Close(); err != nil {
 			e.log.Error("failed to close EFS file", zap.Error(err), zap.String("path", fpath.efs))
 		}
 	}()
 
-	if jpngReader.err != nil || jpngStatus.err != nil {
+	if jpngReaderFut.get().err != nil || jpngStatusFut.get().err != nil {
 		e.respondWithInternalServerErrorText(c)
-	} else if jpngReader.reader == nil || jpngStatus.time == nil {
+	} else if jpngReaderFut.get().reader == nil || jpngStatusFut.get().time == nil {
 		e.respondWithNotFoundText(c)
 	} else {
-		e.respondWithEFSFile(c, fpath, jpngStatus, jpngReader, e.permanentCache)
+		e.respondWithEFSFile(c, fpath, jpngStatusFut, jpngReaderFut, e.permanentCache)
 	}
 
-	// Now ensure WebP file exists.
-	webPStatus := <-webPStatusCh
-
-	e.ensureWebPUpdated(c, jpngStatus, webPStatus, jpngReader, fpath, taskCh)
+	e.ensureWebPUpdated(c, jpngStatusFut, webPStatusFut, jpngReaderFut, fpath, taskCh)
 }
 
 func (e *environment) respondWithInternalServerErrorText(c *gin.Context) {
@@ -1178,65 +1262,71 @@ func (e *environment) respondWithS3Object(c *gin.Context, fpath *filePath, webPD
 func (e *environment) respondTemporarily(
 	c *gin.Context,
 	fpath *filePath,
-	jpngStatus *efsImageStatus,
-	jpngReader *efsImageReader,
+	jpngStatusFut *efsImageStatusFuture,
+	jpngReaderFut *efsImageReaderFuture,
 ) {
-	if jpngReader.err != nil || jpngStatus.err != nil {
+	if jpngReaderFut.get().err != nil || jpngStatusFut.get().err != nil {
 		e.respondWithInternalServerErrorText(c)
-	} else if jpngReader.reader == nil || jpngStatus.time == nil {
+	} else if jpngReaderFut.get().reader == nil || jpngStatusFut.get().time == nil {
 		e.respondWithNotFoundText(c)
 	} else {
-		e.respondWithEFSFile(c, fpath, jpngStatus, jpngReader, e.temporaryCache)
+		e.respondWithEFSFile(c, fpath, jpngStatusFut, jpngReaderFut, e.temporaryCache)
 	}
 }
 
 func (e *environment) handleWebPRequest(c *gin.Context, fpath *filePath, taskCh chan<- *task) {
-	webPDataCh := make(chan *s3ImageData)
-	jpngStatusCh := make(chan *efsImageStatus)
+	webPDataFut := e.getWebPReader(c, fpath.s3WebP)
+	jpngStatusFut := e.checkJPNGStatus(fpath.efs)
+	defer func() {
+		// Ensure each goroutine is finished.
+		webPDataFut.get()
+		jpngStatusFut.get()
+	}()
 
-	go e.getWebPReader(c, fpath.s3WebP, webPDataCh)
-	go e.checkJPNGStatus(fpath.efs, jpngStatusCh)
+	defer func() {
+		if err := webPDataFut.get().Close(); err != nil {
+			e.log.Error("failed to close WebP object body",
+				zap.Error(err), zap.String("path", fpath.s3WebP))
+		}
+	}()
 
-	webPData := <-webPDataCh
-	var jpngStatus *efsImageStatus
-	var jpngReader *efsImageReader
-	if webPData.err != nil {
+	var jpngReaderFut *efsImageReaderFuture
+	defer func() {
+		if jpngReaderFut == nil {
+			return
+		}
+		if err := jpngReaderFut.get().Close(); err != nil {
+			e.log.Error("failed to close EFS file", zap.Error(err), zap.String("path", fpath.efs))
+		}
+	}()
+
+	if webPDataFut.get().err != nil {
 		e.log.Info(
 			"WebP is requested but JPEG/PNG will be responded due to error on S3",
 			zap.String("path", fpath.efs),
-			zap.Error(webPData.err))
-		jpngReaderCh := make(chan *efsImageReader)
-		go e.getJPNGReader(c, fpath.efs, jpngReaderCh)
-		jpngStatus = <-jpngStatusCh
-
-		jpngReader = <-jpngReaderCh
-		defer func() {
-			if err := jpngReader.Close(); err != nil {
-				e.log.Error("failed to close EFS file", zap.Error(err), zap.String("path", fpath.efs))
-			}
-		}()
-
-		e.respondTemporarily(c, fpath, jpngStatus, jpngReader)
-	} else if webPData.time != nil {
-		e.respondWithS3Object(c, fpath, webPData)
-		jpngStatus = <-jpngStatusCh
+			zap.Error(webPDataFut.get().err))
+		jpngReaderFut = e.getJPNGReader(c, fpath.efs)
+		e.respondTemporarily(c, fpath, jpngStatusFut, jpngReaderFut)
+	} else if webPDataFut.get().time != nil {
+		if jpngStatusFut.get().time != nil && webPDataFut.get().time.Equal(*jpngStatusFut.get().time) {
+			e.respondWithS3Object(c, fpath, webPDataFut.get())
+		} else {
+			jpngReaderFut = e.getJPNGReader(c, fpath.efs)
+			e.respondTemporarily(c, fpath, jpngStatusFut, jpngReaderFut)
+		}
 	} else {
-		jpngReaderCh := make(chan *efsImageReader)
-		go e.getJPNGReader(c, fpath.efs, jpngReaderCh)
-		// WebP not yet generated
-		jpngStatus = <-jpngStatusCh
-
-		jpngReader = <-jpngReaderCh
-		defer func() {
-			if err := jpngReader.Close(); err != nil {
-				e.log.Error("failed to close EFS file", zap.Error(err), zap.String("path", fpath.efs))
-			}
-		}()
-
-		e.respondTemporarily(c, fpath, jpngStatus, jpngReader)
+		jpngReaderFut = e.getJPNGReader(c, fpath.efs)
+		e.respondTemporarily(c, fpath, jpngStatusFut, jpngReaderFut)
 	}
 
-	e.ensureWebPUpdated(c, jpngStatus, &webPData.s3ImageStatus, jpngReader, fpath, taskCh)
+	e.ensureWebPUpdated(
+		c,
+		jpngStatusFut,
+		&s3ImageStatusFuture{data: &webPDataFut.get().s3ImageStatus},
+		jpngReaderFut,
+		fpath,
+		taskCh,
+	)
 }
 
 func (e *environment) handleRequest(c *gin.Context, path string, acceptHeader string, taskCh chan<- *task) {

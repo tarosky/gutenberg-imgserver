@@ -267,8 +267,11 @@ func (s *ImgServerSuite) Test_Accepted_S3_EFS() {
 }
 
 func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
-	const path = "dir/image000.jpg"
-	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
+	const (
+		path        = "dir/image000.jpg"
+		longTextLen = int64(1024)
+	)
+	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 	s.uploadJPNGToS3(s.ctx, path, sampleJPEG, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
 
@@ -276,12 +279,12 @@ func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
 
 		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
-		s.Assert().Equal(webPContentType, header.contentType())
-		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
-		s.Assert().Equal(eTag, header.eTag())
-		s.Assert().Equal(sampleLastModified, header.lastModified())
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
 		body, err := ioutil.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
@@ -435,18 +438,18 @@ func (s *ImgServerSuite) Test_Unaccepted_NoS3_NoEFS() {
 
 func (s *ImgServerSuite) Test_Accepted_S3_EFS_Old() {
 	const path = "dir/image000.jpg"
-	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, &oldModTime)
+	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, &oldModTime)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
-		s.Assert().Equal(webPContentType, header.contentType())
-		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
-		s.Assert().Equal(eTag, header.eTag())
-		s.Assert().Equal(oldLastModified, header.lastModified())
+		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
+		s.Assert().Equal(sampleJPEGETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
 		body, err := ioutil.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
