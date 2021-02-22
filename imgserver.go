@@ -662,7 +662,7 @@ func (b *efsFileBody) Close() error {
 func (b *efsFileBody) Seek(offset int64, whence int) (int64, error) {
 	seek := func() (int64, error) {
 		b.currOffset = offsetUncontrolled
-		return b.Seek(offset, whence)
+		return b.body.Seek(offset, whence)
 	}
 
 	switch b.currOffset {
