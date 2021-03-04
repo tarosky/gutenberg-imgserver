@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -36,9 +37,13 @@ func (s *ImgServerSuite) SetupTest() {
 
 	s.Require().NoError(os.MkdirAll(s.env.efsMountPath+"/dir", 0755))
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 25; i++ {
 		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.jpg", s.env.efsMountPath, i), &s.Suite)
 		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.png", s.env.efsMountPath, i), &s.Suite)
+	}
+	for i := 25; i < 50; i++ {
+		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.JPG", s.env.efsMountPath, i), &s.Suite)
+		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.PNG", s.env.efsMountPath, i), &s.Suite)
 	}
 }
 
@@ -225,7 +230,7 @@ func (s *ImgServerSuite) uploadJPNGToS3(
 	lastModified *time.Time,
 ) string {
 	var contentType string
-	switch filepath.Ext(path) {
+	switch strings.ToLower(filepath.Ext(path)) {
 	case ".jpg", ".jpeg":
 		contentType = jpegContentType
 	case ".png":
@@ -243,8 +248,22 @@ func (s *ImgServerSuite) uploadJPNGToS3(
 		lastModified)
 }
 
-func (s *ImgServerSuite) Test_Accepted_S3_EFS() {
-	const path = "dir/image000.jpg"
+const (
+	imagePathL            = "dir/image000.jpg"
+	imagePathU            = "dir/image025.JPG"
+	imageNonExistentPathL = "dir/nonexistent.jpg"
+	imageNonExistentPathU = "dir/nonexistent.JPG"
+)
+
+func (s *ImgServerSuite) Test_AcceptedS3EFS_L() {
+	s.AcceptedS3EFS(imagePathL)
+}
+
+func (s *ImgServerSuite) Test_AcceptedS3EFS_U() {
+	s.AcceptedS3EFS(imagePathU)
+}
+
+func (s *ImgServerSuite) AcceptedS3EFS(path string) {
 	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -266,11 +285,17 @@ func (s *ImgServerSuite) Test_Accepted_S3_EFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
-	const (
-		path        = "dir/image000.jpg"
-		longTextLen = int64(1024)
-	)
+func (s *ImgServerSuite) Test_AcceptedS3NoEFS_L() {
+	s.AcceptedS3NoEFS(imagePathL)
+}
+
+func (s *ImgServerSuite) Test_AcceptedS3NoEFS_U() {
+	s.AcceptedS3NoEFS(imagePathU)
+}
+
+func (s *ImgServerSuite) AcceptedS3NoEFS(path string) {
+	const longTextLen = int64(1024)
+
 	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 	s.uploadJPNGToS3(s.ctx, path, sampleJPEG, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
@@ -295,8 +320,15 @@ func (s *ImgServerSuite) Test_Accepted_S3_NoEFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Accepted_NoS3_EFS() {
-	const path = "dir/image000.jpg"
+func (s *ImgServerSuite) Test_AcceptedNoS3EFS_L() {
+	s.AcceptedNoS3EFS(imagePathL)
+}
+
+func (s *ImgServerSuite) Test_AcceptedNoS3EFS_U() {
+	s.AcceptedNoS3EFS(imagePathU)
+}
+
+func (s *ImgServerSuite) AcceptedNoS3EFS(path string) {
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
 
@@ -316,11 +348,16 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_EFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Accepted_NoS3_NoEFS() {
-	const (
-		path        = "dir/nonexistent.jpg"
-		longTextLen = int64(1024)
-	)
+func (s *ImgServerSuite) Test_AcceptedNoS3NoEFS_L() {
+	s.AcceptedNoS3NoEFS(imageNonExistentPathL)
+}
+
+func (s *ImgServerSuite) Test_AcceptedNoS3NoEFS_U() {
+	s.AcceptedNoS3NoEFS(imageNonExistentPathU)
+}
+
+func (s *ImgServerSuite) AcceptedNoS3NoEFS(path string) {
+	const longTextLen = int64(1024)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
@@ -341,8 +378,15 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_NoEFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Unaccepted_S3_EFS() {
-	const path = "dir/image000.jpg"
+func (s *ImgServerSuite) Test_UnacceptedS3EFS_L() {
+	s.UnacceptedS3EFS(imagePathL)
+}
+
+func (s *ImgServerSuite) Test_UnacceptedS3EFS_U() {
+	s.UnacceptedS3EFS(imagePathU)
+}
+
+func (s *ImgServerSuite) UnacceptedS3EFS(path string) {
 	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
@@ -363,11 +407,16 @@ func (s *ImgServerSuite) Test_Unaccepted_S3_EFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Unaccepted_S3_NoEFS() {
-	const (
-		path        = "dir/image000.jpg"
-		longTextLen = int64(1024)
-	)
+func (s *ImgServerSuite) Test_UnacceptedS3NoEFS_L() {
+	s.UnacceptedS3NoEFS(imagePathL)
+}
+
+func (s *ImgServerSuite) Test_UnacceptedS3NoEFS_U() {
+	s.UnacceptedS3NoEFS(imagePathU)
+}
+
+func (s *ImgServerSuite) UnacceptedS3NoEFS(path string) {
+	const longTextLen = int64(1024)
 
 	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
@@ -390,8 +439,15 @@ func (s *ImgServerSuite) Test_Unaccepted_S3_NoEFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Unaccepted_NoS3_EFS() {
-	const path = "dir/image000.jpg"
+func (s *ImgServerSuite) Test_UnacceptedNoS3EFS_L() {
+	s.UnacceptedNoS3EFS(imagePathL)
+}
+
+func (s *ImgServerSuite) Test_UnacceptedNoS3EFS_U() {
+	s.UnacceptedNoS3EFS(imagePathU)
+}
+
+func (s *ImgServerSuite) UnacceptedNoS3EFS(path string) {
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
 
@@ -411,11 +467,16 @@ func (s *ImgServerSuite) Test_Unaccepted_NoS3_EFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Unaccepted_NoS3_NoEFS() {
-	const (
-		path        = "dir/nonexistent.jpg"
-		longTextLen = int64(1024)
-	)
+func (s *ImgServerSuite) Test_UnacceptedNoS3NoEFS_L() {
+	s.UnacceptedNoS3NoEFS(imageNonExistentPathL)
+}
+
+func (s *ImgServerSuite) Test_UnacceptedNoS3NoEFS_U() {
+	s.UnacceptedNoS3NoEFS(imageNonExistentPathU)
+}
+
+func (s *ImgServerSuite) UnacceptedNoS3NoEFS(path string) {
+	const longTextLen = int64(1024)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
@@ -436,8 +497,15 @@ func (s *ImgServerSuite) Test_Unaccepted_NoS3_NoEFS() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Accepted_S3_EFS_Old() {
-	const path = "dir/image000.jpg"
+func (s *ImgServerSuite) Test_AcceptedS3EFSOld_L() {
+	s.AcceptedS3EFSOld(imagePathL)
+}
+
+func (s *ImgServerSuite) Test_AcceptedS3EFSOld_U() {
+	s.AcceptedS3EFSOld(imagePathU)
+}
+
+func (s *ImgServerSuite) AcceptedS3EFSOld(path string) {
 	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, &oldModTime)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -460,19 +528,19 @@ func (s *ImgServerSuite) Test_Accepted_S3_EFS_Old() {
 	})
 }
 
-func (s *ImgServerSuite) Test_Accepted_NoS3_EFS_BatchSendRepeat() {
+func (s *ImgServerSuite) Test_AcceptedNoS3EFSBatchSendRepeat() {
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		for i := 0; i < 30; i++ {
+		for i := 0; i < 20; i++ {
 			s.request(ctx, ts, fmt.Sprintf("/dir/image%03d.jpg", i), chromeAcceptHeader)
 		}
 		time.Sleep(3 * time.Second)
 
 		msgs := s.receiveSQSMessages(ctx)
-		s.Assert().Len(msgs, 30)
+		s.Assert().Len(msgs, 20)
 	})
 }
 
-func (s *ImgServerSuite) Test_Accepted_NoS3_EFS_BatchSendWait() {
+func (s *ImgServerSuite) Test_AcceptedNoS3EFSBatchSendWait() {
 	s.env.config.sqsBatchWaitTime = 5
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -484,8 +552,6 @@ func (s *ImgServerSuite) Test_Accepted_NoS3_EFS_BatchSendWait() {
 		msgs := s.receiveSQSMessages(ctx)
 		s.Assert().Len(msgs, 10)
 		s.deleteSQSMessages(ctx, msgs)
-
-		s.Assert().Empty(s.receiveSQSMessages(ctx))
 
 		time.Sleep(3 * time.Second)
 
