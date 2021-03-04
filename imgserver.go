@@ -1137,7 +1137,7 @@ func (e *environment) ensureWebPUpdated(
 	if jpngReaderFut.get().reader != nil && jpngStatusFut.get().time != nil {
 		// PUT the latest image file for processing.
 		var contentType string
-		switch filepath.Ext(fpath.s3JPNG) {
+		switch strings.ToLower(filepath.Ext(fpath.s3JPNG)) {
 		case ".jpg", ".jpeg":
 			contentType = jpegContentType
 		case ".png":
