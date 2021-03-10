@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -15,9 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqst "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/suite"
 )
@@ -60,17 +63,14 @@ func (s *ImgServerSuite) serve(do func(context.Context, *httptest.Server)) {
 	})
 }
 
-func (s *ImgServerSuite) receiveSQSMessages(ctx context.Context) []*sqs.Message {
-	visibilityTimeout := int64(5)
-	maxNumberOfMessages := int64(10)
-
-	messages := []*sqs.Message{}
+func (s *ImgServerSuite) receiveSQSMessages(ctx context.Context) []sqst.Message {
+	messages := []sqst.Message{}
 
 	for {
-		res, err := s.env.sqsClient.ReceiveMessageWithContext(ctx, &sqs.ReceiveMessageInput{
+		res, err := s.env.sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            &s.env.sqsQueueURL,
-			VisibilityTimeout:   &visibilityTimeout,
-			MaxNumberOfMessages: &maxNumberOfMessages,
+			VisibilityTimeout:   5,
+			MaxNumberOfMessages: 10,
 		})
 		s.Require().NoError(err)
 		if len(res.Messages) == 0 {
@@ -83,17 +83,17 @@ func (s *ImgServerSuite) receiveSQSMessages(ctx context.Context) []*sqs.Message 
 	return messages
 }
 
-func (s *ImgServerSuite) deleteSQSMessages(ctx context.Context, messages []*sqs.Message) {
-	entries := make([]*sqs.DeleteMessageBatchRequestEntry, 0, 10)
+func (s *ImgServerSuite) deleteSQSMessages(ctx context.Context, messages []sqst.Message) {
+	entries := make([]sqst.DeleteMessageBatchRequestEntry, 0, 10)
 	for i, msg := range messages {
 		id := strconv.Itoa(i)
-		entries = append(entries, &sqs.DeleteMessageBatchRequestEntry{
+		entries = append(entries, sqst.DeleteMessageBatchRequestEntry{
 			Id:            &id,
 			ReceiptHandle: msg.ReceiptHandle,
 		})
 	}
 
-	res, err := s.env.sqsClient.DeleteMessageBatchWithContext(
+	res, err := s.env.sqsClient.DeleteMessageBatch(
 		ctx,
 		&sqs.DeleteMessageBatchInput{
 			QueueUrl: &s.env.sqsQueueURL,
@@ -145,30 +145,28 @@ func (s *ImgServerSuite) assertS3SrcExists(
 	contentType string,
 	contentLength int64,
 ) {
-	key := s.env.s3SrcKeyBase + "/" + path
-	res, err := s.env.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+	res, err := s.env.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.env.s3Bucket,
-		Key:    &key,
+		Key:    aws.String(s.env.s3SrcKeyBase + "/" + path),
 	})
 	s.Assert().NoError(err)
-	s.Assert().Equal(path, *res.Metadata[pathMetadata])
-	t, err := time.Parse(time.RFC3339Nano, *res.Metadata[timestampMetadata])
+	s.Assert().Equal(path, res.Metadata[pathMetadata])
+	t, err := time.Parse(time.RFC3339Nano, res.Metadata[timestampMetadata])
 	s.Assert().NoError(err)
 	s.Assert().Equal(lastModified.UTC(), t)
 	s.Assert().Equal(contentType, *res.ContentType)
-	s.Assert().Equal(contentLength, *res.ContentLength)
+	s.Assert().Equal(contentLength, res.ContentLength)
 }
 
 func (s *ImgServerSuite) assertS3SrcNotExists(ctx context.Context, path string) {
-	key := s.env.s3SrcKeyBase + "/" + path
-	_, err := s.env.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+	_, err := s.env.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.env.s3Bucket,
-		Key:    &key,
+		Key:    aws.String(s.env.s3SrcKeyBase + "/" + path),
 	})
 	s.Assert().NotNil(err)
-	awsErr, ok := err.(awserr.Error)
-	s.Assert().True(ok)
-	s.Assert().Equal(s3ErrCodeNotFound, awsErr.Code())
+	var apiErr smithy.APIError
+	errors.As(err, &apiErr)
+	s.Assert().Equal(s3ErrCodeNotFound, apiErr.ErrorCode())
 }
 
 func (s *ImgServerSuite) uploadToS3(
@@ -193,14 +191,14 @@ func (s *ImgServerSuite) uploadToS3(
 	}
 	tsStr := ts.Format(time.RFC3339Nano)
 
-	res, err := s.env.s3Client.PutObjectWithContext(ctx, &s3.PutObjectInput{
+	res, err := s.env.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &s.env.s3Bucket,
 		Key:         &key,
 		Body:        f,
 		ContentType: &contentType,
-		Metadata: map[string]*string{
-			pathMetadata:      &metadataPath,
-			timestampMetadata: &tsStr,
+		Metadata: map[string]string{
+			pathMetadata:      metadataPath,
+			timestampMetadata: tsStr,
 		},
 	})
 	s.Require().NoError(err)
@@ -271,7 +269,7 @@ func (s *ImgServerSuite) AcceptedS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
 		s.Assert().Equal(webPContentType, header.contentType())
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
@@ -305,7 +303,7 @@ func (s *ImgServerSuite) AcceptedS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -334,7 +332,7 @@ func (s *ImgServerSuite) AcceptedNoS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(jpegContentType, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -364,7 +362,7 @@ func (s *ImgServerSuite) AcceptedNoS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -393,7 +391,7 @@ func (s *ImgServerSuite) UnacceptedS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
 		s.Assert().Equal(jpegContentType, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -425,7 +423,7 @@ func (s *ImgServerSuite) UnacceptedS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -453,7 +451,7 @@ func (s *ImgServerSuite) UnacceptedNoS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
 		s.Assert().Equal(jpegContentType, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -483,7 +481,7 @@ func (s *ImgServerSuite) UnacceptedNoS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -513,7 +511,7 @@ func (s *ImgServerSuite) AcceptedS3EFSOld(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(jpegContentType, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -541,7 +539,7 @@ func (s *ImgServerSuite) Test_AcceptedNoS3EFSBatchSendRepeat() {
 }
 
 func (s *ImgServerSuite) Test_AcceptedNoS3EFSBatchSendWait() {
-	s.env.config.sqsBatchWaitTime = 5
+	s.env.configure.sqsBatchWaitTime = 5
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		for i := 0; i < 15; i++ {

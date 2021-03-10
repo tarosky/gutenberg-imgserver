@@ -14,17 +14,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 )
 
 const (
-	sampleJPEG     = "sampleimg/image.jpg"
-	sampleJPEGWebP = "sampleimg/image.jpg.webp"
-	samplePNG      = "sampleimg/image.png"
-	samplePNGWebP  = "sampleimg/image.png.webp"
+	sampleJPEG     = "samplefile/image.jpg"
+	sampleJPEGWebP = "samplefile/image.jpg.webp"
+	samplePNG      = "samplefile/image.png"
+	samplePNGWebP  = "samplefile/image.png.webp"
 
 	sampleJPEGSize     = int64(23838)
 	sampleJPEGWebPSize = int64(5294)
@@ -79,7 +79,7 @@ func generateSafeRandomString() string {
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(v)
 }
 
-func getTestConfig(name string) *config {
+func getTestConfig(name string) *configure {
 	region := "ap-northeast-1"
 	sqsName := "test-" + name + "-" + generateSafeRandomString()
 	sqsURL := fmt.Sprintf("https://sqs.%s.amazonaws.com/%s/%s",
@@ -88,7 +88,7 @@ func getTestConfig(name string) *config {
 		sqsName)
 	efsPath := fmt.Sprintf("work/test/%s/%s", name, generateSafeRandomString())
 
-	cfg := &config{
+	cfg := &configure{
 		region:                  region,
 		accessKeyID:             readTestConfig("access-key-id"),
 		secretAccessKey:         readTestConfig("secret-access-key"),
@@ -128,10 +128,10 @@ func newTestEnvironment(name string, s *TestSuite) *environment {
 		"failed to create directory")
 
 	log := createLogger(s.ctx, cfg.logPath, cfg.errorLogPath)
-	e := newEnvironment(cfg, log)
+	e := newEnvironment(s.ctx, cfg, log)
 
 	sqsName := getTestSQSQueueNameFromURL(e.sqsQueueURL)
-	_, err := e.sqsClient.CreateQueueWithContext(s.ctx, &sqs.CreateQueueInput{
+	_, err := e.sqsClient.CreateQueue(s.ctx, &sqs.CreateQueueInput{
 		QueueName: &sqsName,
 	})
 	require.NoError(s.T(), err, "failed to create SQS queue")
@@ -148,7 +148,7 @@ func initTestSuite(name string, t require.TestingT) *TestSuite {
 }
 
 func cleanTestEnvironment(ctx context.Context, s *TestSuite) {
-	if _, err := s.env.sqsClient.DeleteQueueWithContext(ctx, &sqs.DeleteQueueInput{
+	if _, err := s.env.sqsClient.DeleteQueue(ctx, &sqs.DeleteQueueInput{
 		QueueUrl: &s.env.sqsQueueURL,
 	}); err != nil {
 		s.env.log.Error("failed to clean up SQS queue", zap.Error(err))

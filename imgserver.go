@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -16,12 +17,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3t "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqst "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
@@ -41,13 +44,13 @@ const (
 	eTagHeader          = "ETag"
 	lastModifiedHeader  = "Last-Modified"
 
-	s3ErrCodeNotFound = "NotFound" // https://forums.aws.amazon.com/thread.jspa?threadID=145909
+	s3ErrCodeNotFound = "NotFound"
 
-	timestampMetadata = "Original-Timestamp"
-	pathMetadata      = "Original-Path"
+	timestampMetadata = "original-timestamp"
+	pathMetadata      = "original-path"
 )
 
-type config struct {
+type configure struct {
 	region                  string
 	accessKeyID             string
 	secretAccessKey         string
@@ -68,11 +71,11 @@ type config struct {
 
 // Environment holds values needed to execute the entire program.
 type environment struct {
-	config
-	awsSession *session.Session
-	s3Client   *s3.S3
-	sqsClient  *sqs.SQS
-	log        *zap.Logger
+	configure
+	awsConfig *aws.Config
+	s3Client  *s3.Client
+	sqsClient *sqs.Client
+	log       *zap.Logger
 }
 
 // This implements zapcore.WriteSyncer interface.
@@ -276,7 +279,7 @@ func main() {
 			panic(err)
 		}
 
-		cfg := &config{
+		cfg := &configure{
 			region:                  c.String("region"),
 			s3Bucket:                c.String("s3-bucket"),
 			s3SrcKeyBase:            c.String("s3-src-key-base"),
@@ -293,7 +296,11 @@ func main() {
 			pidFile:                 c.String("pid-file"),
 		}
 		log := createLogger(c.Context, cfg.logPath, cfg.errorLogPath)
-		defer log.Sync()
+		defer func() {
+			if err := log.Sync(); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to sync log on exiting: %s", err.Error())
+			}
+		}()
 
 		if cfg.pidFile != "" {
 			pid := []byte(strconv.Itoa(os.Getpid()))
@@ -315,7 +322,7 @@ func main() {
 		}
 
 		gin.SetMode(gin.ReleaseMode)
-		e := newEnvironment(cfg, log)
+		e := newEnvironment(c.Context, cfg, log)
 		e.run(c.Context, e.runServer)
 
 		return nil
@@ -398,23 +405,27 @@ func (t *simpleFlushTimer) cancel() {
 	}
 }
 
-func createAWSSession(cfg *config) *session.Session {
-	c := &aws.Config{Region: &cfg.region}
+func createAWSConfig(ctx context.Context, cfg *configure) *aws.Config {
+	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(cfg.region))
+	if err != nil {
+		panic(err)
+	}
+
 	if cfg.accessKeyID != "" && cfg.secretAccessKey != "" {
-		c.Credentials = credentials.NewStaticCredentials(
+		awsCfg.Credentials = credentials.NewStaticCredentialsProvider(
 			cfg.accessKeyID, cfg.secretAccessKey, "")
 	}
-	return session.Must(session.NewSession(c))
+	return &awsCfg
 }
 
-func newEnvironment(cfg *config, log *zap.Logger) *environment {
-	awsSession := createAWSSession(cfg)
+func newEnvironment(ctx context.Context, cfg *configure, log *zap.Logger) *environment {
+	awsConfig := createAWSConfig(ctx, cfg)
 	return &environment{
-		config:     *cfg,
-		awsSession: awsSession,
-		s3Client:   s3.New(awsSession),
-		sqsClient:  sqs.New(awsSession),
-		log:        log,
+		configure: *cfg,
+		awsConfig: awsConfig,
+		s3Client:  s3.NewFromConfig(*awsConfig),
+		sqsClient: sqs.NewFromConfig(*awsConfig),
+		log:       log,
 	}
 }
 
@@ -469,10 +480,10 @@ func supportsWebP(acceptHeader string) bool {
 
 func (e *environment) sendTasks(
 	ctx context.Context,
-	entries []*sqs.SendMessageBatchRequestEntry,
+	entries []sqst.SendMessageBatchRequestEntry,
 	tasks []*task,
 ) {
-	res, err := e.sqsClient.SendMessageBatchWithContext(
+	res, err := e.sqsClient.SendMessageBatch(
 		ctx,
 		&sqs.SendMessageBatchInput{
 			QueueUrl: &e.sqsQueueURL,
@@ -485,7 +496,7 @@ func (e *environment) sendTasks(
 
 	for _, f := range res.Failed {
 		var level func(string, ...zapcore.Field)
-		if *f.SenderFault {
+		if f.SenderFault {
 			level = e.log.Error
 		} else {
 			level = e.log.Info
@@ -500,7 +511,7 @@ func (e *environment) sendTasks(
 		level("failed to send task",
 			zap.String("code", *f.Code),
 			zap.String("message", *f.Message),
-			zap.Bool("sender-fault", *f.SenderFault),
+			zap.Bool("sender-fault", f.SenderFault),
 			zap.String("path", tasks[i].Path),
 		)
 	}
@@ -511,12 +522,12 @@ func (e *environment) taskSender(ctx context.Context, id string, taskCh <-chan *
 		done <- struct{}{}
 	}()
 
-	entries := make([]*sqs.SendMessageBatchRequestEntry, 0, 10)
+	entries := make([]sqst.SendMessageBatchRequestEntry, 0, 10)
 	tasks := make([]*task, 0, 10)
 
 	// Never reuse allocated slice since task sender goroutine is still referencing it.
 	clearBuf := func() {
-		entries = make([]*sqs.SendMessageBatchRequestEntry, 0, 10)
+		entries = make([]sqst.SendMessageBatchRequestEntry, 0, 10)
 		tasks = make([]*task, 0, 10)
 	}
 
@@ -525,7 +536,7 @@ func (e *environment) taskSender(ctx context.Context, id string, taskCh <-chan *
 
 	idField := zap.String("id", id)
 
-	sendTaskAsync := func(entries []*sqs.SendMessageBatchRequestEntry, tasks []*task) {
+	sendTaskAsync := func(entries []sqst.SendMessageBatchRequestEntry, tasks []*task) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -580,11 +591,10 @@ func (e *environment) taskSender(ctx context.Context, id string, taskCh <-chan *
 					zap.Error(err))
 				continue
 			}
-			jstr := string(jbs)
 
-			entries = append(entries, &sqs.SendMessageBatchRequestEntry{
+			entries = append(entries, sqst.SendMessageBatchRequestEntry{
 				Id:          &id,
-				MessageBody: &jstr,
+				MessageBody: aws.String(string(jbs)),
 			})
 			tasks = append(tasks, t)
 
@@ -883,21 +893,22 @@ func (e *environment) checkWebPStatus(ctx context.Context, s3Key string) *s3Imag
 
 		s3KeyField := zap.String("key", s3Key)
 
-		res, err := e.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+		res, err := e.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 			Bucket: &e.s3Bucket,
 			Key:    &s3Key,
 		})
 		if err != nil {
-			if awsErr, ok := err.(awserr.Error); ok {
-				if awsErr.Code() == s3ErrCodeNotFound {
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				if apiErr.ErrorCode() == s3ErrCodeNotFound {
 					webPStatusCh <- &s3ImageStatus{}
 					return
 				}
 
 				e.log.Error("failed to HEAD object",
 					s3KeyField,
-					zap.String("aws-code", awsErr.Code()),
-					zap.String("aws-message", awsErr.Message()))
+					zap.String("aws-code", apiErr.ErrorCode()),
+					zap.String("aws-message", apiErr.ErrorMessage()))
 				webPStatusCh <- &s3ImageStatus{err: err}
 				return
 			}
@@ -907,10 +918,10 @@ func (e *environment) checkWebPStatus(ctx context.Context, s3Key string) *s3Imag
 			return
 		}
 
-		if ts := res.Metadata[timestampMetadata]; ts != nil {
-			t, err := time.Parse(time.RFC3339Nano, *ts)
+		if ts := res.Metadata[timestampMetadata]; ts != "" {
+			t, err := time.Parse(time.RFC3339Nano, ts)
 			if err != nil {
-				e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
+				e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", ts))
 				webPStatusCh <- &s3ImageStatus{err: err}
 				return
 			}
@@ -971,21 +982,23 @@ func (e *environment) getWebPReader(ctx context.Context, s3Key string) *s3ImageD
 
 		s3KeyField := zap.String("key", s3Key)
 
-		res, err := e.s3Client.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		res, err := e.s3Client.GetObject(ctx, &s3.GetObjectInput{
 			Bucket: &e.s3Bucket,
 			Key:    &s3Key,
 		})
 		if err != nil {
-			if awsErr, ok := err.(awserr.Error); ok {
-				if awsErr.Code() == s3.ErrCodeNoSuchKey {
-					webPStatusCh <- &s3ImageData{}
-					return
-				}
+			var noSuchKeyError *s3t.NoSuchKey
+			if errors.As(err, &noSuchKeyError) {
+				webPStatusCh <- &s3ImageData{}
+				return
+			}
 
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
 				e.log.Error("failed to GET object",
 					s3KeyField,
-					zap.String("aws-code", awsErr.Code()),
-					zap.String("aws-message", awsErr.Message()))
+					zap.String("aws-code", apiErr.ErrorCode()),
+					zap.String("aws-message", apiErr.ErrorMessage()))
 				webPStatusCh <- &s3ImageData{
 					s3ImageStatus: s3ImageStatus{err: err},
 				}
@@ -999,10 +1012,10 @@ func (e *environment) getWebPReader(ctx context.Context, s3Key string) *s3ImageD
 			return
 		}
 
-		if ts := res.Metadata[timestampMetadata]; ts != nil {
-			t, err := time.Parse(time.RFC3339Nano, *ts)
+		if ts := res.Metadata[timestampMetadata]; ts != "" {
+			t, err := time.Parse(time.RFC3339Nano, ts)
 			if err != nil {
-				e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", *ts))
+				e.log.Error("illegal timestamp", s3KeyField, zap.String("timestamp", ts))
 				webPStatusCh <- &s3ImageData{
 					s3ImageStatus: s3ImageStatus{err: err},
 				}
@@ -1014,10 +1027,10 @@ func (e *environment) getWebPReader(ctx context.Context, s3Key string) *s3ImageD
 					eTag: *res.ETag,
 					time: &t,
 				},
-				contentLength: *res.ContentLength,
+				contentLength: res.ContentLength,
 				reader: &s3Body{
 					body: res.Body,
-					size: *res.ContentLength,
+					size: res.ContentLength,
 					log:  e.log,
 				},
 			}
@@ -1148,14 +1161,14 @@ func (e *environment) ensureWebPUpdated(
 		}
 
 		tsStr := jpngStatusFut.get().time.Format(time.RFC3339Nano)
-		if _, err := e.s3Client.PutObjectWithContext(ctx, &s3.PutObjectInput{
+		if _, err := e.s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      &e.s3Bucket,
 			Key:         &fpath.s3JPNG,
 			Body:        jpngReaderFut.get().reader,
 			ContentType: &contentType,
-			Metadata: map[string]*string{
-				pathMetadata:      &fpath.path,
-				timestampMetadata: &tsStr,
+			Metadata: map[string]string{
+				pathMetadata:      fpath.path,
+				timestampMetadata: tsStr,
 			},
 		}); err != nil {
 			e.log.Error("failed to PUT S3 source image",
@@ -1163,7 +1176,7 @@ func (e *environment) ensureWebPUpdated(
 			return
 		}
 	} else {
-		if _, err := e.s3Client.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
+		if _, err := e.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: &e.s3Bucket,
 			Key:    &fpath.s3JPNG,
 		}); err != nil {
@@ -1343,8 +1356,8 @@ func (e *environment) handleRequest(c *gin.Context, path string, acceptHeader st
 
 	fpath := &filePath{
 		efs:    efsAbsPath,
-		s3JPNG: filepath.Clean(filepath.Join(e.s3SrcKeyBase, path)),
-		s3WebP: filepath.Clean(filepath.Join(e.s3DestKeyBase, path+".webp")),
+		s3JPNG: filepath.Clean(filepath.Join(e.s3SrcKeyBase, sanitizedPath)),
+		s3WebP: filepath.Clean(filepath.Join(e.s3DestKeyBase, sanitizedPath+".webp")),
 		sqs:    sanitizedPath,
 		path:   sanitizedPath,
 		name:   name,
