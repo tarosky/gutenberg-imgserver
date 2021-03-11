@@ -216,7 +216,7 @@ func (s *ImgServerSuite) uploadWebPToS3(
 		ctx,
 		s.env.s3DestKeyBase+"/"+path+".webp",
 		bodyPath,
-		webPContentType,
+		webPMIME,
 		path,
 		lastModified)
 }
@@ -230,9 +230,9 @@ func (s *ImgServerSuite) uploadJPNGToS3(
 	var contentType string
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".jpg", ".jpeg":
-		contentType = jpegContentType
+		contentType = jpegMIME
 	case ".png":
-		contentType = pngContentType
+		contentType = pngMIME
 	default:
 		s.Require().Fail("unknown image type")
 	}
@@ -270,7 +270,7 @@ func (s *ImgServerSuite) AcceptedS3EFS(path string) {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
-		s.Assert().Equal(webPContentType, header.contentType())
+		s.Assert().Equal(webPMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -333,7 +333,7 @@ func (s *ImgServerSuite) AcceptedNoS3EFS(path string) {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -342,7 +342,7 @@ func (s *ImgServerSuite) AcceptedNoS3EFS(path string) {
 		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
-		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
+		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegMIME, sampleJPEGSize)
 	})
 }
 
@@ -392,7 +392,7 @@ func (s *ImgServerSuite) UnacceptedS3EFS(path string) {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -452,7 +452,7 @@ func (s *ImgServerSuite) UnacceptedNoS3EFS(path string) {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -461,7 +461,7 @@ func (s *ImgServerSuite) UnacceptedNoS3EFS(path string) {
 		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
-		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
+		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegMIME, sampleJPEGSize)
 	})
 }
 
@@ -512,7 +512,7 @@ func (s *ImgServerSuite) AcceptedS3EFSOld(path string) {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -522,7 +522,7 @@ func (s *ImgServerSuite) AcceptedS3EFSOld(path string) {
 
 		// Send message to update S3 object
 		s.assertDelayedSQSMessage(ctx, path)
-		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
+		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegMIME, sampleJPEGSize)
 	})
 }
 
