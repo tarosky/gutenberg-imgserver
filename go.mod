@@ -1,4 +1,4 @@
-module github.com/tarosky/gutenberg-imgserve
+module github.com/tarosky/gutenberg-imgserver
 
 go 1.15
 
