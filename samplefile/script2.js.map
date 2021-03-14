@@ -1,0 +1,8 @@
+{
+  "version": 3,
+  "file": "script.js",
+  "sources": [
+    "samplefile/script.js"
+  ],
+  "mappings": "CACA,WACE,IAAK,IAAIA,EAAU,EAAGA,GAAW,GAAIA,IAC/BA,EAAU,IAAM,EAClBC,QAAQC,IAAI,YACHF,EAAU,GAAK,EACxBC,QAAQC,IAAI,QACHF,EAAU,GAAK,EACxBC,QAAQC,IAAI,QAEZD,QAAQC,IAAIF,GATlB"
+}

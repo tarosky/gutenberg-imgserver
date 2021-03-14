@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -15,15 +16,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqst "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/suite"
 )
 
 type ImgServerSuite struct {
 	*TestSuite
+}
+
+func toWebPPath(path string) string {
+	return path + ".webp"
 }
 
 func TestImgServerSuite(t *testing.T) {
@@ -45,6 +52,11 @@ func (s *ImgServerSuite) SetupTest() {
 		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.JPG", s.env.efsMountPath, i), &s.Suite)
 		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.PNG", s.env.efsMountPath, i), &s.Suite)
 	}
+	copy(sampleJS, fmt.Sprintf("%s/dir/script.js", s.env.efsMountPath), &s.Suite)
+	copy(sampleMinJS, fmt.Sprintf("%s/dir/script.min.js", s.env.efsMountPath), &s.Suite)
+	copy(sampleSourceMap2, fmt.Sprintf("%s/dir/script.js.map", s.env.efsMountPath), &s.Suite)
+	copy(sampleCSS, fmt.Sprintf("%s/dir/style.css", s.env.efsMountPath), &s.Suite)
+	copy(sampleMinCSS, fmt.Sprintf("%s/dir/style.min.css", s.env.efsMountPath), &s.Suite)
 }
 
 func (s *ImgServerSuite) TearDownTest() {
@@ -60,17 +72,14 @@ func (s *ImgServerSuite) serve(do func(context.Context, *httptest.Server)) {
 	})
 }
 
-func (s *ImgServerSuite) receiveSQSMessages(ctx context.Context) []*sqs.Message {
-	visibilityTimeout := int64(5)
-	maxNumberOfMessages := int64(10)
-
-	messages := []*sqs.Message{}
+func (s *ImgServerSuite) receiveSQSMessages(ctx context.Context) []sqst.Message {
+	messages := []sqst.Message{}
 
 	for {
-		res, err := s.env.sqsClient.ReceiveMessageWithContext(ctx, &sqs.ReceiveMessageInput{
+		res, err := s.env.sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            &s.env.sqsQueueURL,
-			VisibilityTimeout:   &visibilityTimeout,
-			MaxNumberOfMessages: &maxNumberOfMessages,
+			VisibilityTimeout:   5,
+			MaxNumberOfMessages: 10,
 		})
 		s.Require().NoError(err)
 		if len(res.Messages) == 0 {
@@ -83,17 +92,17 @@ func (s *ImgServerSuite) receiveSQSMessages(ctx context.Context) []*sqs.Message 
 	return messages
 }
 
-func (s *ImgServerSuite) deleteSQSMessages(ctx context.Context, messages []*sqs.Message) {
-	entries := make([]*sqs.DeleteMessageBatchRequestEntry, 0, 10)
+func (s *ImgServerSuite) deleteSQSMessages(ctx context.Context, messages []sqst.Message) {
+	entries := make([]sqst.DeleteMessageBatchRequestEntry, 0, 10)
 	for i, msg := range messages {
 		id := strconv.Itoa(i)
-		entries = append(entries, &sqs.DeleteMessageBatchRequestEntry{
+		entries = append(entries, sqst.DeleteMessageBatchRequestEntry{
 			Id:            &id,
 			ReceiptHandle: msg.ReceiptHandle,
 		})
 	}
 
-	res, err := s.env.sqsClient.DeleteMessageBatchWithContext(
+	res, err := s.env.sqsClient.DeleteMessageBatch(
 		ctx,
 		&sqs.DeleteMessageBatchInput{
 			QueueUrl: &s.env.sqsQueueURL,
@@ -145,30 +154,28 @@ func (s *ImgServerSuite) assertS3SrcExists(
 	contentType string,
 	contentLength int64,
 ) {
-	key := s.env.s3SrcKeyBase + "/" + path
-	res, err := s.env.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+	res, err := s.env.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.env.s3Bucket,
-		Key:    &key,
+		Key:    aws.String(s.env.s3SrcKeyBase + "/" + path),
 	})
 	s.Assert().NoError(err)
-	s.Assert().Equal(path, *res.Metadata[pathMetadata])
-	t, err := time.Parse(time.RFC3339Nano, *res.Metadata[timestampMetadata])
+	s.Assert().Equal(path, res.Metadata[pathMetadata])
+	t, err := time.Parse(time.RFC3339Nano, res.Metadata[timestampMetadata])
 	s.Assert().NoError(err)
 	s.Assert().Equal(lastModified.UTC(), t)
 	s.Assert().Equal(contentType, *res.ContentType)
-	s.Assert().Equal(contentLength, *res.ContentLength)
+	s.Assert().Equal(contentLength, res.ContentLength)
 }
 
 func (s *ImgServerSuite) assertS3SrcNotExists(ctx context.Context, path string) {
-	key := s.env.s3SrcKeyBase + "/" + path
-	_, err := s.env.s3Client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+	_, err := s.env.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.env.s3Bucket,
-		Key:    &key,
+		Key:    aws.String(s.env.s3SrcKeyBase + "/" + path),
 	})
 	s.Assert().NotNil(err)
-	awsErr, ok := err.(awserr.Error)
-	s.Assert().True(ok)
-	s.Assert().Equal(s3ErrCodeNotFound, awsErr.Code())
+	var apiErr smithy.APIError
+	errors.As(err, &apiErr)
+	s.Assert().Equal(s3ErrCodeNotFound, apiErr.ErrorCode())
 }
 
 func (s *ImgServerSuite) uploadToS3(
@@ -193,14 +200,14 @@ func (s *ImgServerSuite) uploadToS3(
 	}
 	tsStr := ts.Format(time.RFC3339Nano)
 
-	res, err := s.env.s3Client.PutObjectWithContext(ctx, &s3.PutObjectInput{
+	res, err := s.env.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &s.env.s3Bucket,
 		Key:         &key,
 		Body:        f,
 		ContentType: &contentType,
-		Metadata: map[string]*string{
-			pathMetadata:      &metadataPath,
-			timestampMetadata: &tsStr,
+		Metadata: map[string]string{
+			pathMetadata:      metadataPath,
+			timestampMetadata: tsStr,
 		},
 	})
 	s.Require().NoError(err)
@@ -208,71 +215,87 @@ func (s *ImgServerSuite) uploadToS3(
 	return *res.ETag
 }
 
-func (s *ImgServerSuite) uploadWebPToS3(
+func (s *ImgServerSuite) contentType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg":
+		return jpegMIME
+	case ".png":
+		return pngMIME
+	case ".webp":
+		return webPMIME
+	case ".js":
+		return jsMIME
+	case ".map":
+		return sourceMapMIME
+	case ".css":
+		return cssMIME
+	default:
+		s.Require().Fail("unknown image type")
+	}
+	return ""
+}
+
+func (s *ImgServerSuite) uploadFileToS3Dest(
 	ctx context.Context,
-	path string,
-	bodyPath string,
+	path, s3Path, bodyPath string,
 	lastModified *time.Time,
 ) string {
 	return s.uploadToS3(
 		ctx,
-		s.env.s3DestKeyBase+"/"+path+".webp",
+		s.env.s3DestKeyBase+"/"+s3Path,
 		bodyPath,
-		webPContentType,
+		s.contentType(s3Path),
 		path,
 		lastModified)
 }
 
-func (s *ImgServerSuite) uploadJPNGToS3(
+func (s *ImgServerSuite) uploadFileToS3Src(
 	ctx context.Context,
-	path string,
-	bodyPath string,
+	path, s3Path, bodyPath string,
 	lastModified *time.Time,
 ) string {
-	var contentType string
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".jpg", ".jpeg":
-		contentType = jpegContentType
-	case ".png":
-		contentType = pngContentType
-	default:
-		s.Require().Fail("unknown image type")
-	}
-
 	return s.uploadToS3(
 		ctx,
-		s.env.s3SrcKeyBase+"/"+path,
+		s.env.s3SrcKeyBase+"/"+s3Path,
 		bodyPath,
-		contentType,
+		s.contentType(s3Path),
 		path,
 		lastModified)
 }
 
 const (
-	imagePathL            = "dir/image000.jpg"
-	imagePathU            = "dir/image025.JPG"
-	imageNonExistentPathL = "dir/nonexistent.jpg"
-	imageNonExistentPathU = "dir/nonexistent.JPG"
+	jpgPathL                  = "dir/image000.jpg"
+	jpgPathU                  = "dir/image025.JPG"
+	jpgNonExistentPathL       = "dir/nonexistent.jpg"
+	jpgNonExistentPathU       = "dir/nonexistent.JPG"
+	jsPathL                   = "dir/script.js"
+	jsNonExistentPathL        = "dir/nonexistent.js"
+	minJSPathL                = "dir/script.min.js"
+	sourceMapPathL            = "dir/script.js.map"
+	sourceMapNonExistentPathL = "dir/nonexistent.js.map"
+	cssPathL                  = "dir/style.css"
+	cssNonExistentPathL       = "dir/nonexistent.css"
+	minCSSPathL               = "dir/style.min.css"
 )
 
-func (s *ImgServerSuite) Test_AcceptedS3EFS_L() {
-	s.AcceptedS3EFS(imagePathL)
+func (s *ImgServerSuite) Test_JPGAcceptedS3EFS_L() {
+	s.JPGAcceptedS3EFS(jpgPathL)
 }
 
-func (s *ImgServerSuite) Test_AcceptedS3EFS_U() {
-	s.AcceptedS3EFS(imagePathU)
+func (s *ImgServerSuite) Test_JPGAcceptedS3EFS_U() {
+	s.JPGAcceptedS3EFS(jpgPathU)
 }
 
-func (s *ImgServerSuite) AcceptedS3EFS(path string) {
-	eTag := s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
+func (s *ImgServerSuite) JPGAcceptedS3EFS(path string) {
+	eTag := s.uploadFileToS3Dest(s.ctx, path, toWebPPath(path), sampleJPEGWebP, nil)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
-		s.Assert().Equal(webPContentType, header.contentType())
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(webPMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -285,19 +308,19 @@ func (s *ImgServerSuite) AcceptedS3EFS(path string) {
 	})
 }
 
-func (s *ImgServerSuite) Test_AcceptedS3NoEFS_L() {
-	s.AcceptedS3NoEFS(imagePathL)
+func (s *ImgServerSuite) Test_JPGAcceptedS3NoEFS_L() {
+	s.JPGAcceptedS3NoEFS(jpgPathL)
 }
 
-func (s *ImgServerSuite) Test_AcceptedS3NoEFS_U() {
-	s.AcceptedS3NoEFS(imagePathU)
+func (s *ImgServerSuite) Test_JPGAcceptedS3NoEFS_U() {
+	s.JPGAcceptedS3NoEFS(jpgPathU)
 }
 
-func (s *ImgServerSuite) AcceptedS3NoEFS(path string) {
+func (s *ImgServerSuite) JPGAcceptedS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
-	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
-	s.uploadJPNGToS3(s.ctx, path, sampleJPEG, nil)
+	s.uploadFileToS3Dest(s.ctx, path, toWebPPath(path), sampleJPEGWebP, nil)
+	s.uploadFileToS3Src(s.ctx, path, path, sampleJPEG, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -305,7 +328,7 @@ func (s *ImgServerSuite) AcceptedS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -320,22 +343,22 @@ func (s *ImgServerSuite) AcceptedS3NoEFS(path string) {
 	})
 }
 
-func (s *ImgServerSuite) Test_AcceptedNoS3EFS_L() {
-	s.AcceptedNoS3EFS(imagePathL)
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3EFS_L() {
+	s.JPGAcceptedNoS3EFS(jpgPathL)
 }
 
-func (s *ImgServerSuite) Test_AcceptedNoS3EFS_U() {
-	s.AcceptedNoS3EFS(imagePathU)
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3EFS_U() {
+	s.JPGAcceptedNoS3EFS(jpgPathU)
 }
 
-func (s *ImgServerSuite) AcceptedNoS3EFS(path string) {
+func (s *ImgServerSuite) JPGAcceptedNoS3EFS(path string) {
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -344,19 +367,19 @@ func (s *ImgServerSuite) AcceptedNoS3EFS(path string) {
 		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
-		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
+		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegMIME, sampleJPEGSize)
 	})
 }
 
-func (s *ImgServerSuite) Test_AcceptedNoS3NoEFS_L() {
-	s.AcceptedNoS3NoEFS(imageNonExistentPathL)
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3NoEFS_L() {
+	s.JPGAcceptedNoS3NoEFS(jpgNonExistentPathL)
 }
 
-func (s *ImgServerSuite) Test_AcceptedNoS3NoEFS_U() {
-	s.AcceptedNoS3NoEFS(imageNonExistentPathU)
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3NoEFS_U() {
+	s.JPGAcceptedNoS3NoEFS(jpgNonExistentPathU)
 }
 
-func (s *ImgServerSuite) AcceptedNoS3NoEFS(path string) {
+func (s *ImgServerSuite) JPGAcceptedNoS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -364,7 +387,7 @@ func (s *ImgServerSuite) AcceptedNoS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -378,23 +401,23 @@ func (s *ImgServerSuite) AcceptedNoS3NoEFS(path string) {
 	})
 }
 
-func (s *ImgServerSuite) Test_UnacceptedS3EFS_L() {
-	s.UnacceptedS3EFS(imagePathL)
+func (s *ImgServerSuite) Test_JPGUnacceptedS3EFS_L() {
+	s.JPGUnacceptedS3EFS(jpgPathL)
 }
 
-func (s *ImgServerSuite) Test_UnacceptedS3EFS_U() {
-	s.UnacceptedS3EFS(imagePathU)
+func (s *ImgServerSuite) Test_JPGUnacceptedS3EFS_U() {
+	s.JPGUnacceptedS3EFS(jpgPathU)
 }
 
-func (s *ImgServerSuite) UnacceptedS3EFS(path string) {
-	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
+func (s *ImgServerSuite) JPGUnacceptedS3EFS(path string) {
+	s.uploadFileToS3Dest(s.ctx, path, toWebPPath(path), sampleJPEGWebP, nil)
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -407,25 +430,25 @@ func (s *ImgServerSuite) UnacceptedS3EFS(path string) {
 	})
 }
 
-func (s *ImgServerSuite) Test_UnacceptedS3NoEFS_L() {
-	s.UnacceptedS3NoEFS(imagePathL)
+func (s *ImgServerSuite) Test_JPGUnacceptedS3NoEFS_L() {
+	s.JPGUnacceptedS3NoEFS(jpgPathL)
 }
 
-func (s *ImgServerSuite) Test_UnacceptedS3NoEFS_U() {
-	s.UnacceptedS3NoEFS(imagePathU)
+func (s *ImgServerSuite) Test_JPGUnacceptedS3NoEFS_U() {
+	s.JPGUnacceptedS3NoEFS(jpgPathU)
 }
 
-func (s *ImgServerSuite) UnacceptedS3NoEFS(path string) {
+func (s *ImgServerSuite) JPGUnacceptedS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
-	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, nil)
+	s.uploadFileToS3Dest(s.ctx, path, toWebPPath(path), sampleJPEGWebP, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -439,22 +462,22 @@ func (s *ImgServerSuite) UnacceptedS3NoEFS(path string) {
 	})
 }
 
-func (s *ImgServerSuite) Test_UnacceptedNoS3EFS_L() {
-	s.UnacceptedNoS3EFS(imagePathL)
+func (s *ImgServerSuite) Test_JPGUnacceptedNoS3EFS_L() {
+	s.JPGUnacceptedNoS3EFS(jpgPathL)
 }
 
-func (s *ImgServerSuite) Test_UnacceptedNoS3EFS_U() {
-	s.UnacceptedNoS3EFS(imagePathU)
+func (s *ImgServerSuite) Test_JPGUnacceptedNoS3EFS_U() {
+	s.JPGUnacceptedNoS3EFS(jpgPathU)
 }
 
-func (s *ImgServerSuite) UnacceptedNoS3EFS(path string) {
+func (s *ImgServerSuite) JPGUnacceptedNoS3EFS(path string) {
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.permanentCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -463,19 +486,19 @@ func (s *ImgServerSuite) UnacceptedNoS3EFS(path string) {
 		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertDelayedSQSMessage(ctx, path)
-		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
+		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegMIME, sampleJPEGSize)
 	})
 }
 
-func (s *ImgServerSuite) Test_UnacceptedNoS3NoEFS_L() {
-	s.UnacceptedNoS3NoEFS(imageNonExistentPathL)
+func (s *ImgServerSuite) Test_JPGUnacceptedNoS3NoEFS_L() {
+	s.JPGUnacceptedNoS3NoEFS(jpgNonExistentPathL)
 }
 
-func (s *ImgServerSuite) Test_UnacceptedNoS3NoEFS_U() {
-	s.UnacceptedNoS3NoEFS(imageNonExistentPathU)
+func (s *ImgServerSuite) Test_JPGUnacceptedNoS3NoEFS_U() {
+	s.JPGUnacceptedNoS3NoEFS(jpgNonExistentPathU)
 }
 
-func (s *ImgServerSuite) UnacceptedNoS3NoEFS(path string) {
+func (s *ImgServerSuite) JPGUnacceptedNoS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -483,7 +506,7 @@ func (s *ImgServerSuite) UnacceptedNoS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -497,24 +520,24 @@ func (s *ImgServerSuite) UnacceptedNoS3NoEFS(path string) {
 	})
 }
 
-func (s *ImgServerSuite) Test_AcceptedS3EFSOld_L() {
-	s.AcceptedS3EFSOld(imagePathL)
+func (s *ImgServerSuite) Test_JPGAcceptedS3EFSOld_L() {
+	s.JPGAcceptedS3EFSOld(jpgPathL)
 }
 
-func (s *ImgServerSuite) Test_AcceptedS3EFSOld_U() {
-	s.AcceptedS3EFSOld(imagePathU)
+func (s *ImgServerSuite) Test_JPGAcceptedS3EFSOld_U() {
+	s.JPGAcceptedS3EFSOld(jpgPathU)
 }
 
-func (s *ImgServerSuite) AcceptedS3EFSOld(path string) {
-	s.uploadWebPToS3(s.ctx, path, sampleJPEGWebP, &oldModTime)
+func (s *ImgServerSuite) JPGAcceptedS3EFSOld(path string) {
+	s.uploadFileToS3Dest(s.ctx, path, toWebPPath(path), sampleJPEGWebP, &oldModTime)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.config.temporaryCache, header.cacheControl())
-		s.Assert().Equal(jpegContentType, header.contentType())
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -524,11 +547,11 @@ func (s *ImgServerSuite) AcceptedS3EFSOld(path string) {
 
 		// Send message to update S3 object
 		s.assertDelayedSQSMessage(ctx, path)
-		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegContentType, sampleJPEGSize)
+		s.assertS3SrcExists(ctx, path, &sampleModTime, jpegMIME, sampleJPEGSize)
 	})
 }
 
-func (s *ImgServerSuite) Test_AcceptedNoS3EFSBatchSendRepeat() {
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3EFSBatchSendRepeat() {
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		for i := 0; i < 20; i++ {
 			s.request(ctx, ts, fmt.Sprintf("/dir/image%03d.jpg", i), chromeAcceptHeader)
@@ -540,8 +563,8 @@ func (s *ImgServerSuite) Test_AcceptedNoS3EFSBatchSendRepeat() {
 	})
 }
 
-func (s *ImgServerSuite) Test_AcceptedNoS3EFSBatchSendWait() {
-	s.env.config.sqsBatchWaitTime = 5
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3EFSBatchSendWait() {
+	s.env.configure.sqsBatchWaitTime = 5
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		for i := 0; i < 15; i++ {
@@ -590,4 +613,454 @@ func (s *ImgServerSuite) Test_ReopenLogFile() {
 	s.Assert().Contains(oldLog, "second")
 
 	s.Assert().Contains(currentLog, "third")
+}
+
+func (s *ImgServerSuite) Test_JSS3EFS() {
+	eTag := s.uploadFileToS3Dest(s.ctx, jsPathL, jsPathL, sampleMinJS, nil)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(jsMIME, header.contentType())
+		s.Assert().Equal(sampleMinJSSize, res.ContentLength)
+		s.Assert().Equal(eTag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, jsPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_JSS3NoEFS() {
+	const longTextLen = int64(1024)
+
+	s.uploadFileToS3Dest(s.ctx, jsPathL, jsPathL, sampleMinJS, nil)
+	s.uploadFileToS3Src(s.ctx, jsPathL, jsPathL, sampleJS, nil)
+	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + jsPathL))
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertDelayedSQSMessage(ctx, jsPathL)
+		// Ensure source file on S3 is also removed
+		s.assertS3SrcNotExists(ctx, jsPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_JSNoS3EFS() {
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(jsMIME, header.contentType())
+		s.Assert().Equal(sampleJSSize, res.ContentLength)
+		s.Assert().Equal(sampleJSETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertDelayedSQSMessage(ctx, jsPathL)
+		s.assertS3SrcExists(ctx, jsPathL, &sampleModTime, jsMIME, sampleJSSize)
+	})
+}
+
+func (s *ImgServerSuite) Test_JSNoS3NoEFS() {
+	const longTextLen = int64(1024)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+jsNonExistentPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, jsNonExistentPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_JSS3EFSOld() {
+	s.uploadFileToS3Dest(s.ctx, jsPathL, toWebPPath(jsPathL), sampleMinJS, &oldModTime)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(jsMIME, header.contentType())
+		s.Assert().Equal(sampleJSSize, res.ContentLength)
+		s.Assert().Equal(sampleJSETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		// Send message to update S3 object
+		s.assertDelayedSQSMessage(ctx, jsPathL)
+		s.assertS3SrcExists(ctx, jsPathL, &sampleModTime, jsMIME, sampleJSSize)
+	})
+}
+
+func (s *ImgServerSuite) Test_CSSS3EFS() {
+	eTag := s.uploadFileToS3Dest(s.ctx, cssPathL, cssPathL, sampleMinCSS, nil)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+cssPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(cssMIME, header.contentType())
+		s.Assert().Equal(sampleMinCSSSize, res.ContentLength)
+		s.Assert().Equal(eTag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, cssPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_CSSS3NoEFS() {
+	const longTextLen = int64(1024)
+
+	s.uploadFileToS3Dest(s.ctx, cssPathL, cssPathL, sampleMinCSS, nil)
+	s.uploadFileToS3Src(s.ctx, cssPathL, cssPathL, sampleCSS, nil)
+	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + cssPathL))
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+cssPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertDelayedSQSMessage(ctx, cssPathL)
+		// Ensure source file on S3 is also removed
+		s.assertS3SrcNotExists(ctx, cssPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_CSSNoS3EFS() {
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+cssPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(cssMIME, header.contentType())
+		s.Assert().Equal(sampleCSSSize, res.ContentLength)
+		s.Assert().Equal(sampleCSSETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertDelayedSQSMessage(ctx, cssPathL)
+		s.assertS3SrcExists(ctx, cssPathL, &sampleModTime, cssMIME, sampleCSSSize)
+	})
+}
+
+func (s *ImgServerSuite) Test_CSSNoS3NoEFS() {
+	const longTextLen = int64(1024)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+cssNonExistentPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, cssNonExistentPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_CSSS3EFSOld() {
+	s.uploadFileToS3Dest(s.ctx, cssPathL, toWebPPath(cssPathL), sampleMinCSS, &oldModTime)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+cssPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(cssMIME, header.contentType())
+		s.Assert().Equal(sampleCSSSize, res.ContentLength)
+		s.Assert().Equal(sampleCSSETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		// Send message to update S3 object
+		s.assertDelayedSQSMessage(ctx, cssPathL)
+		s.assertS3SrcExists(ctx, cssPathL, &sampleModTime, cssMIME, sampleCSSSize)
+	})
+}
+
+func (s *ImgServerSuite) Test_SourceMapS3EFS() {
+	s.uploadFileToS3Dest(s.ctx, sourceMapPathL, sourceMapPathL, sampleSourceMap, nil)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+sourceMapPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(sourceMapMIME, header.contentType())
+		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
+		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, sourceMapPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_SourceMapS3NoEFS() {
+	const longTextLen = int64(1024)
+
+	eTag := s.uploadFileToS3Dest(s.ctx, sourceMapPathL, sourceMapPathL, sampleSourceMap, nil)
+	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + sourceMapPathL))
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+sourceMapPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(sourceMapMIME, header.contentType())
+		s.Assert().Equal(sampleSourceMapSize, res.ContentLength)
+		s.Assert().Equal(eTag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, sourceMapPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_SourceMapNoS3EFS() {
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+sourceMapPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(sourceMapMIME, header.contentType())
+		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
+		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, sourceMapPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_SourceMapNoS3NoEFS() {
+	const longTextLen = int64(1024)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+sourceMapNonExistentPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, sourceMapNonExistentPathL)
+	})
+}
+
+func (s *ImgServerSuite) Test_MinJSS3EFS() {
+	s.FileS3EFS(minJSPathL, jsMIME, sampleMinJSSize, sampleMinJSETag)
+}
+
+func (s *ImgServerSuite) Test_MinCSSS3EFS() {
+	s.FileS3EFS(minCSSPathL, cssMIME, sampleMinCSSSize, sampleMinCSSETag)
+}
+
+func (s *ImgServerSuite) FileS3EFS(
+	path string,
+	contentType string,
+	size int64,
+	eTag string,
+) {
+	s.uploadFileToS3Dest(s.ctx, path, path, sampleSourceMap, nil)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(contentType, header.contentType())
+		s.Assert().Equal(size, res.ContentLength)
+		s.Assert().Equal(eTag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, path)
+	})
+}
+
+func (s *ImgServerSuite) Test_MinJSS3NoEFS() {
+	s.FileS3NoEFS(minJSPathL)
+}
+
+func (s *ImgServerSuite) Test_MinCSSS3NoEFS() {
+	s.FileS3NoEFS(minCSSPathL)
+}
+
+func (s *ImgServerSuite) FileS3NoEFS(path string) {
+	const longTextLen = int64(1024)
+
+	s.uploadFileToS3Dest(s.ctx, path, path, sampleSourceMap, nil)
+	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, path)
+	})
+}
+
+func (s *ImgServerSuite) Test_MinJSNoS3EFS() {
+	s.FileS3EFS(minJSPathL, jsMIME, sampleMinJSSize, sampleMinJSETag)
+}
+
+func (s *ImgServerSuite) Test_MinCSSNoS3EFS() {
+	s.FileS3EFS(minCSSPathL, cssMIME, sampleMinCSSSize, sampleMinCSSETag)
+}
+
+func (s *ImgServerSuite) FileNoS3EFS(
+	path string,
+	contentType string,
+	size int64,
+	eTag string,
+) {
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(contentType, header.contentType())
+		s.Assert().Equal(size, res.ContentLength)
+		s.Assert().Equal(eTag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, path)
+	})
+}
+
+func (s *ImgServerSuite) Test_MinJSNoS3NoEFS() {
+	s.FileNoS3NoEFS(minJSPathL)
+}
+
+func (s *ImgServerSuite) Test_MinCSSNoS3NoEFS() {
+	s.FileNoS3NoEFS(minCSSPathL)
+}
+
+func (s *ImgServerSuite) FileNoS3NoEFS(path string) {
+	const longTextLen = int64(1024)
+
+	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, path)
+	})
 }

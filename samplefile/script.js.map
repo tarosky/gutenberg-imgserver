@@ -1,0 +1,16 @@
+{
+  "version": 3,
+  "file": "script.js",
+  "sources": [
+    "samplefile/script.js"
+  ],
+  "sourcesContent": [
+    "// FizzBuzz sample program\n(function () {\n  for (var counter = 1; counter <= 20; counter++) {\n    if (counter % 15 == 0) {\n      console.log(\"FizzBuzz\");\n    } else if (counter % 3 == 0) {\n      console.log(\"Fizz\");\n    } else if (counter % 5 == 0) {\n      console.log(\"Buzz\");\n    } else {\n      console.log(counter);\n    }\n  }\n})();\n"
+  ],
+  "names": [
+    "counter",
+    "console",
+    "log"
+  ],
+  "mappings": "CACA,WACE,IAAK,IAAIA,EAAU,EAAGA,GAAW,GAAIA,IAC/BA,EAAU,IAAM,EAClBC,QAAQC,IAAI,YACHF,EAAU,GAAK,EACxBC,QAAQC,IAAI,QACHF,EAAU,GAAK,EACxBC,QAAQC,IAAI,QAEZD,QAAQC,IAAIF,GATlB"
+}
