@@ -64,13 +64,18 @@ type configure struct {
 	sqsQueueURL             string
 	sqsBatchWaitTime        uint
 	efsMountPath            string
-	temporaryCache          string
-	permanentCache          string
+	temporaryCache          *cacheControl
+	permanentCache          *cacheControl
 	gracefulShutdownTimeout uint
 	port                    int
 	logPath                 string
 	errorLogPath            string
 	pidFile                 string
+}
+
+type cacheControl struct {
+	name  string
+	value string
 }
 
 // Environment holds values needed to execute the entire program.
@@ -291,13 +296,19 @@ func main() {
 			sqsQueueURL:             c.String("sqs-queue-url"),
 			sqsBatchWaitTime:        c.Uint("sqs-batch-wait-time"),
 			efsMountPath:            efsMouthPath,
-			temporaryCache:          fmt.Sprintf("public, max-age=%d", c.Uint("temp-resp-max-age")),
-			permanentCache:          fmt.Sprintf("public, max-age=%d", c.Uint("perm-resp-max-age")),
 			gracefulShutdownTimeout: c.Uint("graceful-shutdown-timeout"),
 			port:                    c.Int("port"),
 			logPath:                 logPath,
 			errorLogPath:            errorLogPath,
 			pidFile:                 c.String("pid-file"),
+			temporaryCache: &cacheControl{
+				name:  "temporary",
+				value: fmt.Sprintf("public, max-age=%d", c.Uint("temp-resp-max-age")),
+			},
+			permanentCache: &cacheControl{
+				name:  "permanent",
+				value: fmt.Sprintf("public, max-age=%d", c.Uint("perm-resp-max-age")),
+			},
 		}
 		log := createLogger(c.Context, cfg.logPath, cfg.errorLogPath)
 		defer func() {
@@ -1214,26 +1225,37 @@ func (e *environment) ensureDestS3ObjUpdated(
 	}
 }
 
-func (e *environment) respondWithInternalServerErrorText(c *gin.Context) {
+func (e *environment) logResponse(resType, path, source string, cache *cacheControl) {
+	e.log.Debug("response",
+		zap.String("type", resType),
+		zap.String("path", path),
+		zap.String("source", source),
+		zap.String("cache", cache.name))
+}
+
+func (e *environment) respondWithInternalServerErrorText(c *gin.Context, fpath *filePath) {
+	e.logResponse("500", fpath.path, "inline", e.temporaryCache)
 	const message = "internal server error"
-	c.Writer.Header().Set(cacheControlHeader, e.temporaryCache)
+	c.Writer.Header().Set(cacheControlHeader, e.temporaryCache.value)
 	c.Writer.Header().Set(contentLengthHeader, strconv.Itoa(len(message)))
 	c.String(http.StatusInternalServerError, message)
 	c.Writer.Flush()
 }
 
-func (e *environment) respondWithNotFoundText(c *gin.Context) {
+func (e *environment) respondWithNotFoundText(c *gin.Context, fpath *filePath) {
+	e.logResponse("404", fpath.path, "inline", e.temporaryCache)
 	const message = "file not found"
-	c.Writer.Header().Set(cacheControlHeader, e.temporaryCache)
+	c.Writer.Header().Set(cacheControlHeader, e.temporaryCache.value)
 	c.Writer.Header().Set(contentLengthHeader, strconv.Itoa(len(message)))
 	c.String(http.StatusNotFound, message)
 	c.Writer.Flush()
 }
 
-func (e *environment) respondWithS3Object(c *gin.Context, s3DestKey string, respData *s3ObjData) {
-	c.Writer.Header().Set(cacheControlHeader, e.permanentCache)
+func (e *environment) respondWithS3Object(c *gin.Context, fpath *filePath, respData *s3ObjData) {
+	e.logResponse("s3object", fpath.path, fpath.s3DestKey, e.permanentCache)
+	c.Writer.Header().Set(cacheControlHeader, e.permanentCache.value)
 	c.Writer.Header().Set(eTagHeader, respData.eTag)
-	c.Writer.Header().Set(contentTypeHeader, e.contentType(s3DestKey))
+	c.Writer.Header().Set(contentTypeHeader, e.contentType(fpath.s3DestKey))
 	http.ServeContent(c.Writer, c.Request, "", *respData.time, respData.reader)
 	c.Writer.Flush()
 }
@@ -1263,15 +1285,17 @@ func (e *environment) respondWithEFSFile(
 	fpath *filePath,
 	status *efsFileStatus,
 	reader readSeekCloser,
-	cache string,
+	cache *cacheControl,
 ) {
+	e.logResponse("efsfile", fpath.path, fpath.efs, cache)
+
 	body := &efsFileBody{
 		body: reader,
 		size: status.size,
 		log:  e.log,
 	}
 
-	c.Writer.Header().Set(cacheControlHeader, cache)
+	c.Writer.Header().Set(cacheControlHeader, cache.value)
 	c.Writer.Header().Set(eTagHeader, status.eTag)
 	c.Writer.Header().Set(contentTypeHeader, e.contentType(fpath.name))
 	http.ServeContent(c.Writer, c.Request, fpath.name, *status.time, body)
@@ -1302,9 +1326,9 @@ func (e *environment) respondWithOriginalWhileGeneration(
 			zap.String("path", fpath.efs),
 			zap.NamedError("readerErr", fileReaderFut.get().err),
 			zap.NamedError("statusErr", fileStatusFut.get().err))
-		e.respondWithInternalServerErrorText(c)
+		e.respondWithInternalServerErrorText(c, fpath)
 	} else if isEFSNull(fileReaderFut, fileStatusFut) {
-		e.respondWithNotFoundText(c)
+		e.respondWithNotFoundText(c, fpath)
 	} else {
 		e.respondWithEFSFile(
 			c, fpath, fileStatusFut.get(), fileReaderFut.get().reader, e.permanentCache)
@@ -1320,7 +1344,7 @@ func (e *environment) respondTemporarily(
 	readerFut *efsFileReaderFuture,
 ) {
 	if hasErrorInEFS(readerFut, statusFut) {
-		e.respondWithInternalServerErrorText(c)
+		e.respondWithInternalServerErrorText(c, fpath)
 		e.log.Error("failed to get file on EFS",
 			zap.String("path", fpath.efs),
 			zap.NamedError("readerErr", readerFut.get().err),
@@ -1329,7 +1353,7 @@ func (e *environment) respondTemporarily(
 	}
 
 	if isEFSNull(readerFut, statusFut) {
-		e.respondWithNotFoundText(c)
+		e.respondWithNotFoundText(c, fpath)
 		return
 	}
 
@@ -1371,7 +1395,7 @@ func (e *environment) respondWithGeneratedOrOriginalWhileGeneration(
 		fileReaderFut = e.getEFSFileReader(c, fpath.efs)
 		e.respondTemporarily(c, fpath, fileStatusFut, fileReaderFut)
 	} else if timeExistsAndEqual(fileStatusFut, destReaderFut) {
-		e.respondWithS3Object(c, fpath.s3DestKey, destReaderFut.get())
+		e.respondWithS3Object(c, fpath, destReaderFut.get())
 	} else {
 		fileReaderFut = e.getEFSFileReader(c, fpath.efs)
 		e.respondTemporarily(c, fpath, fileStatusFut, fileReaderFut)
@@ -1409,7 +1433,7 @@ func (e *environment) respondWithOriginalOrGenerated(
 			zap.String("path", fpath.efs),
 			zap.NamedError("readerErr", fileReaderFut.get().err),
 			zap.NamedError("statusErr", fileStatusFut.get().err))
-		e.respondWithInternalServerErrorText(c)
+		e.respondWithInternalServerErrorText(c, fpath)
 		return
 	}
 
@@ -1432,16 +1456,16 @@ func (e *environment) respondWithOriginalOrGenerated(
 		e.log.Error("failed to GET S3 object",
 			zap.String("path", fpath.s3DestKey),
 			zap.Error(destReaderFut.get().err))
-		e.respondWithInternalServerErrorText(c)
+		e.respondWithInternalServerErrorText(c, fpath)
 		return
 	}
 
 	if destReaderFut.get().reader == nil {
-		e.respondWithNotFoundText(c)
+		e.respondWithNotFoundText(c, fpath)
 		return
 	}
 
-	e.respondWithS3Object(c, fpath.s3DestKey, destReaderFut.get())
+	e.respondWithS3Object(c, fpath, destReaderFut.get())
 }
 
 func (e *environment) respondWithOriginal(
@@ -1466,12 +1490,12 @@ func (e *environment) respondWithOriginal(
 			zap.String("path", fpath.efs),
 			zap.NamedError("readerErr", fileReaderFut.get().err),
 			zap.NamedError("statusErr", fileStatusFut.get().err))
-		e.respondWithInternalServerErrorText(c)
+		e.respondWithInternalServerErrorText(c, fpath)
 		return
 	}
 
 	if isEFSNull(fileReaderFut, fileStatusFut) {
-		e.respondWithNotFoundText(c)
+		e.respondWithNotFoundText(c, fpath)
 		return
 	}
 
