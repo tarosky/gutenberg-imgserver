@@ -116,12 +116,18 @@ func getTestConfig(name string) *configure {
 		sqsQueueURL:             sqsURL,
 		sqsBatchWaitTime:        2,
 		efsMountPath:            efsPath,
-		temporaryCache:          fmt.Sprintf("public, max-age=%d", 20*60),
-		permanentCache:          fmt.Sprintf("public, max-age=%d", 365*24*60*60),
 		gracefulShutdownTimeout: 5,
 		port:                    0, // Not used
 		logPath:                 efsPath + "/imgserver.log",
 		errorLogPath:            efsPath + "/imgserver-error.log",
+		temporaryCache: &cacheControl{
+			name:  "temporary",
+			value: fmt.Sprintf("public, max-age=%d", 20*60),
+		},
+		permanentCache: &cacheControl{
+			name:  "permanent",
+			value: fmt.Sprintf("public, max-age=%d", 365*24*60*60),
+		},
 	}
 
 	return cfg

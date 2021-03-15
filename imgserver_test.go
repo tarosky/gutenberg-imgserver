@@ -294,7 +294,7 @@ func (s *ImgServerSuite) JPGAcceptedS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(webPMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
@@ -328,7 +328,7 @@ func (s *ImgServerSuite) JPGAcceptedS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -357,7 +357,7 @@ func (s *ImgServerSuite) JPGAcceptedNoS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -387,7 +387,7 @@ func (s *ImgServerSuite) JPGAcceptedNoS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -416,7 +416,7 @@ func (s *ImgServerSuite) JPGUnacceptedS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -448,7 +448,7 @@ func (s *ImgServerSuite) JPGUnacceptedS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -476,7 +476,7 @@ func (s *ImgServerSuite) JPGUnacceptedNoS3EFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -506,7 +506,7 @@ func (s *ImgServerSuite) JPGUnacceptedNoS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -536,7 +536,7 @@ func (s *ImgServerSuite) JPGAcceptedS3EFSOld(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
@@ -623,7 +623,7 @@ func (s *ImgServerSuite) Test_JSS3EFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(jsMIME, header.contentType())
 		s.Assert().Equal(sampleMinJSSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
@@ -649,7 +649,7 @@ func (s *ImgServerSuite) Test_JSS3NoEFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -670,7 +670,7 @@ func (s *ImgServerSuite) Test_JSNoS3EFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(jsMIME, header.contentType())
 		s.Assert().Equal(sampleJSSize, res.ContentLength)
 		s.Assert().Equal(sampleJSETag, header.eTag())
@@ -692,7 +692,7 @@ func (s *ImgServerSuite) Test_JSNoS3NoEFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -714,7 +714,7 @@ func (s *ImgServerSuite) Test_JSS3EFSOld() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(jsMIME, header.contentType())
 		s.Assert().Equal(sampleJSSize, res.ContentLength)
 		s.Assert().Equal(sampleJSETag, header.eTag())
@@ -737,7 +737,7 @@ func (s *ImgServerSuite) Test_CSSS3EFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(cssMIME, header.contentType())
 		s.Assert().Equal(sampleMinCSSSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
@@ -763,7 +763,7 @@ func (s *ImgServerSuite) Test_CSSS3NoEFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -784,7 +784,7 @@ func (s *ImgServerSuite) Test_CSSNoS3EFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(cssMIME, header.contentType())
 		s.Assert().Equal(sampleCSSSize, res.ContentLength)
 		s.Assert().Equal(sampleCSSETag, header.eTag())
@@ -806,7 +806,7 @@ func (s *ImgServerSuite) Test_CSSNoS3NoEFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -828,7 +828,7 @@ func (s *ImgServerSuite) Test_CSSS3EFSOld() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(cssMIME, header.contentType())
 		s.Assert().Equal(sampleCSSSize, res.ContentLength)
 		s.Assert().Equal(sampleCSSETag, header.eTag())
@@ -851,7 +851,7 @@ func (s *ImgServerSuite) Test_SourceMapS3EFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(sourceMapMIME, header.contentType())
 		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
 		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
@@ -876,7 +876,7 @@ func (s *ImgServerSuite) Test_SourceMapS3NoEFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(sourceMapMIME, header.contentType())
 		s.Assert().Equal(sampleSourceMapSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
@@ -896,7 +896,7 @@ func (s *ImgServerSuite) Test_SourceMapNoS3EFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(sourceMapMIME, header.contentType())
 		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
 		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
@@ -918,7 +918,7 @@ func (s *ImgServerSuite) Test_SourceMapNoS3NoEFS() {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -953,7 +953,7 @@ func (s *ImgServerSuite) FileS3EFS(
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(contentType, header.contentType())
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
@@ -986,7 +986,7 @@ func (s *ImgServerSuite) FileS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
@@ -1019,7 +1019,7 @@ func (s *ImgServerSuite) FileNoS3EFS(
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
 		s.Assert().Equal(contentType, header.contentType())
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
@@ -1051,7 +1051,7 @@ func (s *ImgServerSuite) FileNoS3NoEFS(path string) {
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache, header.cacheControl())
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
 		s.Assert().Equal(plainContentType, header.contentType())
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
