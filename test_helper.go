@@ -47,20 +47,24 @@ const (
 	oldSafariAcceptHeader = "image/png,image/svg+xml,image/*;q=0.8,video/*;q=0.8,*/*;q=0.5"
 )
 
+func sampleETag(size int64) string {
+	return fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), size)
+}
+
 var (
 	oldModTime           = time.Date(2019, time.January, 1, 0, 0, 0, 0, time.UTC)
 	oldLastModified      = oldModTime.Format(http.TimeFormat)
 	sampleModTime        = time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
 	sampleLastModified   = sampleModTime.Format(http.TimeFormat)
 	sampleS3Timestamp    = sampleModTime.Format(time.RFC3339Nano)
-	sampleJPEGETag       = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleJPEGSize)
-	samplePNGETag        = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), samplePNGSize)
-	sampleJSETag         = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleJSSize)
-	sampleMinJSETag      = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleMinJSSize)
-	sampleCSSETag        = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleCSSSize)
-	sampleMinCSSETag     = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleMinCSSSize)
-	sampleSourceMapETag  = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleSourceMapSize)
-	sampleSourceMap2ETag = fmt.Sprintf("\"%x-%x\"", sampleModTime.UnixNano(), sampleSourceMap2Size)
+	sampleJPEGETag       = sampleETag(sampleJPEGSize)
+	samplePNGETag        = sampleETag(samplePNGSize)
+	sampleJSETag         = sampleETag(sampleJSSize)
+	sampleMinJSETag      = sampleETag(sampleMinJSSize)
+	sampleCSSETag        = sampleETag(sampleCSSSize)
+	sampleMinCSSETag     = sampleETag(sampleMinCSSSize)
+	sampleSourceMapETag  = sampleETag(sampleSourceMapSize)
+	sampleSourceMap2ETag = sampleETag(sampleSourceMap2Size)
 )
 
 // InitTest moves working directory to project root directory.
