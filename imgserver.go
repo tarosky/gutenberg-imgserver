@@ -26,6 +26,7 @@ import (
 	sqst "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
+	"github.com/gobwas/glob"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -33,6 +34,7 @@ import (
 
 const (
 	sourceMapMIME = "application/octet-stream"
+	gifMIME       = "image/gif"
 	jpegMIME      = "image/jpeg"
 	pngMIME       = "image/png"
 	webPMIME      = "image/webp"
@@ -55,22 +57,25 @@ const (
 )
 
 type configure struct {
-	region                  string
-	accessKeyID             string
-	secretAccessKey         string
-	s3Bucket                string
-	s3SrcKeyBase            string
-	s3DestKeyBase           string
-	sqsQueueURL             string
-	sqsBatchWaitTime        uint
-	efsMountPath            string
-	temporaryCache          *cacheControl
-	permanentCache          *cacheControl
-	gracefulShutdownTimeout uint
-	port                    int
-	logPath                 string
-	errorLogPath            string
-	pidFile                 string
+	region                   string
+	accessKeyID              string
+	secretAccessKey          string
+	s3Bucket                 string
+	s3SrcKeyBase             string
+	s3DestKeyBase            string
+	sqsQueueURL              string
+	sqsBatchWaitTime         uint
+	efsMountPath             string
+	temporaryCache           *cacheControl
+	permanentCache           *cacheControl
+	gracefulShutdownTimeout  uint
+	port                     int
+	logPath                  string
+	errorLogPath             string
+	pidFile                  string
+	publicCotnentS3Bucket    string
+	publicCotnentPathPattern string
+	publicCotnentPathGlob    glob.Glob
 }
 
 type cacheControl struct {
@@ -193,6 +198,23 @@ func createLogger(ctx context.Context, logPath, errorLogPath string) *zap.Logger
 		zap.WithCaller(false))
 }
 
+func createCloudfrontPathGlob(pattern string) glob.Glob {
+	if pattern == "" {
+		return nil
+	}
+
+	g, err := glob.Compile(strings.TrimLeft(pattern, "/"))
+	if err != nil {
+		fmt.Fprintf(
+			os.Stderr,
+			"failed to compile glob: %s",
+			err.Error())
+		panic(err)
+	}
+
+	return g
+}
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "imgserver"
@@ -267,6 +289,16 @@ func main() {
 			Name:    "pid-file",
 			Aliases: []string{"i"},
 		},
+		&cli.StringFlag{
+			Name:        "public-content-s3-bucket",
+			DefaultText: "",
+			Aliases:     []string{"pubb"},
+		},
+		&cli.StringFlag{
+			Name:        "public-content-path-pattern",
+			DefaultText: "",
+			Aliases:     []string{"pubp"},
+		},
 	}
 
 	app.Action = func(c *cli.Context) error {
@@ -289,18 +321,21 @@ func main() {
 		}
 
 		cfg := &configure{
-			region:                  c.String("region"),
-			s3Bucket:                c.String("s3-bucket"),
-			s3SrcKeyBase:            c.String("s3-src-key-base"),
-			s3DestKeyBase:           c.String("s3-dest-key-base"),
-			sqsQueueURL:             c.String("sqs-queue-url"),
-			sqsBatchWaitTime:        c.Uint("sqs-batch-wait-time"),
-			efsMountPath:            efsMouthPath,
-			gracefulShutdownTimeout: c.Uint("graceful-shutdown-timeout"),
-			port:                    c.Int("port"),
-			logPath:                 logPath,
-			errorLogPath:            errorLogPath,
-			pidFile:                 c.String("pid-file"),
+			region:                   c.String("region"),
+			s3Bucket:                 c.String("s3-bucket"),
+			s3SrcKeyBase:             c.String("s3-src-key-base"),
+			s3DestKeyBase:            c.String("s3-dest-key-base"),
+			sqsQueueURL:              c.String("sqs-queue-url"),
+			sqsBatchWaitTime:         c.Uint("sqs-batch-wait-time"),
+			efsMountPath:             efsMouthPath,
+			gracefulShutdownTimeout:  c.Uint("graceful-shutdown-timeout"),
+			port:                     c.Int("port"),
+			logPath:                  logPath,
+			errorLogPath:             errorLogPath,
+			pidFile:                  c.String("pid-file"),
+			publicCotnentS3Bucket:    c.String("public-content-s3-bucket"),
+			publicCotnentPathPattern: c.String("public-content-path-pattern"),
+			publicCotnentPathGlob:    createCloudfrontPathGlob(c.String("public-content-path-pattern")),
 			temporaryCache: &cacheControl{
 				name:  "temporary",
 				value: fmt.Sprintf("public, max-age=%d", c.Uint("temp-resp-max-age")),
@@ -1185,6 +1220,8 @@ func (e *environment) ensureDestS3ObjUpdated(
 			contentType = jpegMIME
 		case ".png":
 			contentType = pngMIME
+		case ".gif":
+			contentType = gifMIME
 		case ".js":
 			contentType = jsMIME
 		case ".css":
@@ -1260,12 +1297,49 @@ func (e *environment) respondWithS3Object(c *gin.Context, fpath *filePath, respD
 	c.Writer.Flush()
 }
 
+func (e *environment) respondWithPublicContentS3Object(
+	c *gin.Context,
+	fpath *filePath,
+	res *s3.GetObjectOutput,
+) {
+	body := &s3Body{
+		body: res.Body,
+		size: res.ContentLength,
+		log:  e.log,
+	}
+	defer func() {
+		if err := body.Close(); err != nil {
+			e.log.Error("failed to close public content s3 body",
+				zap.Error(err),
+				zap.String("path", fpath.path))
+		}
+	}()
+
+	var cacheContol string
+	if res.CacheControl == nil {
+		cacheContol = "no-store, max-age=0"
+	} else {
+		cacheContol = *res.CacheControl
+	}
+	e.logResponse("s3pub", fpath.path, fpath.path, &cacheControl{
+		name:  "s3",
+		value: cacheContol,
+	})
+	c.Writer.Header().Set(cacheControlHeader, cacheContol)
+	c.Writer.Header().Set(eTagHeader, *res.ETag)
+	c.Writer.Header().Set(contentTypeHeader, e.contentType(fpath.path))
+	http.ServeContent(c.Writer, c.Request, "", *res.LastModified, body)
+	c.Writer.Flush()
+}
+
 func (e *environment) contentType(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".jpg", ".jpeg":
 		return jpegMIME
 	case ".png":
 		return pngMIME
+	case ".gif":
+		return gifMIME
 	case ".webp":
 		return webPMIME
 	case ".js":
@@ -1503,6 +1577,39 @@ func (e *environment) respondWithOriginal(
 		c, fpath, fileStatusFut.get(), fileReaderFut.get().reader, e.permanentCache)
 }
 
+func (e *environment) respondWithPublicContentBucket(c *gin.Context, fpath *filePath) {
+	s3Key := fpath.path
+	s3KeyField := zap.String("key", s3Key)
+
+	res, err := e.s3Client.GetObject(c, &s3.GetObjectInput{
+		Bucket: &e.publicCotnentS3Bucket,
+		Key:    &s3Key,
+	})
+	if err != nil {
+		var noSuchKeyError *s3t.NoSuchKey
+		if errors.As(err, &noSuchKeyError) {
+			e.respondWithNotFoundText(c, fpath)
+			return
+		}
+
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			e.log.Error("failed to GET object",
+				s3KeyField,
+				zap.String("aws-code", apiErr.ErrorCode()),
+				zap.String("aws-message", apiErr.ErrorMessage()))
+			e.respondWithInternalServerErrorText(c, fpath)
+			return
+		}
+
+		e.log.Error("failed to connect to AWS", s3KeyField, zap.Error(err))
+		e.respondWithInternalServerErrorText(c, fpath)
+		return
+	}
+
+	e.respondWithPublicContentS3Object(c, fpath, res)
+}
+
 func (e *environment) handleRequest(
 	c *gin.Context,
 	path string,
@@ -1548,8 +1655,13 @@ func (e *environment) handleRequest(
 		name: name,
 	}
 
+	if e.publicCotnentPathGlob != nil && e.publicCotnentPathGlob.Match(fpath.path) {
+		e.respondWithPublicContentBucket(c, fpath)
+		return
+	}
+
 	switch getNormalizedExtension(name) {
-	case ".jpg", ".jpeg", ".png":
+	case ".jpg", ".jpeg", ".png", ".gif":
 		fpath.s3SrcKey = joinClean(e.s3SrcKeyBase, sanitizedPath)
 		fpath.s3DestKey = joinClean(e.s3DestKeyBase, sanitizedPath+".webp")
 		if supportsWebP(acceptHeader) {
