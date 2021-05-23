@@ -14,6 +14,7 @@ env:
   ACCESS_KEY_ID: AKIAQGFE5ESVOYCL2ANC
   AWS_ACCOUNT_ID: '013230744746'
   S3_BUCKET: gutenberg-modrepo-testbucket-66i59vgigq34
+  PUBLIC_CONTENT_S3_BUCKET: gutenberg-modrepo-test2bucket-1ksvqu56v9wug
   GO_VERSION: 1.15.8
 
 jobs:
@@ -27,6 +28,7 @@ jobs:
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
     - run: echo "$AWS_ACCOUNT_ID" > config/test/aws-account-id
     - run: echo "$S3_BUCKET" > config/test/s3-bucket
+    - run: echo "$PUBLIC_CONTENT_S3_BUCKET" > config/test/public-content-s3-bucket
     - run: echo "$TEST_AWS_SECRET_ACCESS_KEY" > config/test/secret-access-key
       env:
         TEST_AWS_SECRET_ACCESS_KEY: ${{secrets.TEST_AWS_SECRET_ACCESS_KEY}}
@@ -46,14 +48,15 @@ jobs:
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
     - run: echo "$AWS_ACCOUNT_ID" > config/test/aws-account-id
     - run: echo "$S3_BUCKET" > config/test/s3-bucket
+    - run: echo "$PUBLIC_CONTENT_S3_BUCKET" > config/test/public-content-s3-bucket
     - run: echo "$TEST_AWS_SECRET_ACCESS_KEY" > config/test/secret-access-key
       env:
         TEST_AWS_SECRET_ACCESS_KEY: ${{secrets.TEST_AWS_SECRET_ACCESS_KEY}}
     - run: go get -u github.com/jstemmer/go-junit-report
     - run: go test -v ./... 2>&1 | tee work/test.log
-    - run: go-junit-report < work/test.log > work/report.xml
+    - run: go-junit-report < work/test.log | tee work/report.xml
     - name: Publish Unit Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v1.6
+      uses: EnricoMi/publish-unit-test-result-action@v1
       if: always()
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}

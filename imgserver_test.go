@@ -215,6 +215,30 @@ func (s *ImgServerSuite) uploadToS3(
 	return *res.ETag
 }
 
+func (s *ImgServerSuite) uploadToPublicContentS3(
+	ctx context.Context,
+	key string,
+	bodyPath string,
+	contentType, cacheControl string,
+) string {
+	f, err := os.Open(bodyPath)
+	s.Require().NoError(err)
+	defer func() {
+		s.Require().NoError(f.Close())
+	}()
+
+	res, err := s.env.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:       &s.env.publicCotnentS3Bucket,
+		Key:          &key,
+		Body:         f,
+		ContentType:  &contentType,
+		CacheControl: &cacheControl,
+	})
+	s.Require().NoError(err)
+
+	return *res.ETag
+}
+
 func (s *ImgServerSuite) contentType(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".jpg", ".jpeg":
@@ -276,6 +300,8 @@ const (
 	cssPathL                  = "dir/style.css"
 	cssNonExistentPathL       = "dir/nonexistent.css"
 	minCSSPathL               = "dir/style.min.css"
+
+	publicContentCacheControl = "public, max-age=86400"
 )
 
 func (s *ImgServerSuite) Test_JPGAcceptedS3EFS_L() {
@@ -305,6 +331,31 @@ func (s *ImgServerSuite) JPGAcceptedS3EFS(path string) {
 
 		s.assertNoSQSMessage(ctx)
 		s.assertS3SrcNotExists(ctx, path)
+	})
+}
+
+func (s *ImgServerSuite) Test_PublicContentJPG() {
+	keyPrefix := strings.SplitN(s.env.publicCotnentPathPattern, "/", 2)[0]
+	path := keyPrefix + "/wp-content/uploads/sample.jpg"
+	eTag := s.uploadToPublicContentS3(
+		s.ctx,
+		path,
+		sampleJPEG,
+		jpegMIME,
+		publicContentCacheControl)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(publicContentCacheControl, header.cacheControl())
+		s.Assert().Equal(jpegMIME, header.contentType())
+		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
+		s.Assert().Equal(eTag, header.eTag())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
 	})
 }
 
