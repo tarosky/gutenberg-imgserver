@@ -55,17 +55,13 @@ func sampleETag(size int64) string {
 
 var (
 	oldModTime           = time.Date(2019, time.January, 1, 0, 0, 0, 0, time.UTC)
-	oldLastModified      = oldModTime.Format(http.TimeFormat)
 	sampleModTime        = time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
 	sampleLastModified   = sampleModTime.Format(http.TimeFormat)
-	sampleS3Timestamp    = sampleModTime.Format(time.RFC3339Nano)
 	sampleJPEGETag       = sampleETag(sampleJPEGSize)
-	samplePNGETag        = sampleETag(samplePNGSize)
 	sampleJSETag         = sampleETag(sampleJSSize)
 	sampleMinJSETag      = sampleETag(sampleMinJSSize)
 	sampleCSSETag        = sampleETag(sampleCSSSize)
 	sampleMinCSSETag     = sampleETag(sampleMinCSSSize)
-	sampleSourceMapETag  = sampleETag(sampleSourceMapSize)
 	sampleSourceMap2ETag = sampleETag(sampleSourceMap2Size)
 )
 
@@ -118,8 +114,8 @@ func getTestConfig(name string) *configure {
 		accessKeyID:              readTestConfig("access-key-id"),
 		secretAccessKey:          readTestConfig("secret-access-key"),
 		s3Bucket:                 readTestConfig("s3-bucket"),
-		s3SrcKeyBase:             generateSafeRandomString() + "/" + name,
-		s3DestKeyBase:            generateSafeRandomString() + "/" + name,
+		s3SrcPrefix:              generateSafeRandomString() + "/" + name + "/",
+		s3DestPrefix:             generateSafeRandomString() + "/" + name + "/",
 		sqsQueueURL:              sqsURL,
 		sqsBatchWaitTime:         2,
 		efsMountPath:             efsPath,

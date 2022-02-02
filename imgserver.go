@@ -54,15 +54,20 @@ const (
 
 	pathMetadata      = "original-path"
 	timestampMetadata = "original-timestamp"
+
+	APIVersion = 2
 )
+
+// Provided by govvv at compile time
+var Version string
 
 type configure struct {
 	region                   string
 	accessKeyID              string
 	secretAccessKey          string
 	s3Bucket                 string
-	s3SrcKeyBase             string
-	s3DestKeyBase            string
+	s3SrcPrefix              string
+	s3DestPrefix             string
 	sqsQueueURL              string
 	sqsBatchWaitTime         uint
 	efsMountPath             string
@@ -179,14 +184,14 @@ func createLogger(ctx context.Context, logPath, errorLogPath string) *zap.Logger
 			select {
 			case _, ok := <-sigusr1:
 				if !ok {
-					break
+					return
 				}
 				out.reopen()
 				errOut.reopen()
 			case <-ctx.Done():
 				signal.Stop(sigusr1)
 				// closing sigusr1 causes panic (close of closed channel)
-				break
+				return
 			}
 		}
 	}()
@@ -195,7 +200,7 @@ func createLogger(ctx context.Context, logPath, errorLogPath string) *zap.Logger
 		zapcore.NewCore(enc, out, zap.NewAtomicLevelAt(zap.DebugLevel)),
 		zap.ErrorOutput(errOut),
 		zap.Development(),
-		zap.WithCaller(false))
+		zap.WithCaller(false)).With(zap.String("version", Version))
 }
 
 func createCloudfrontPathGlob(pattern string) glob.Glob {
@@ -231,13 +236,13 @@ func main() {
 			Required: true,
 		},
 		&cli.StringFlag{
-			Name:     "s3-src-key-base",
-			Aliases:  []string{"sk"},
+			Name:     "s3-src-prefix",
+			Aliases:  []string{"sp"},
 			Required: true,
 		},
 		&cli.StringFlag{
-			Name:     "s3-dest-key-base",
-			Aliases:  []string{"dk"},
+			Name:     "s3-dest-prefix",
+			Aliases:  []string{"dp"},
 			Required: true,
 		},
 		&cli.StringFlag{
@@ -323,8 +328,8 @@ func main() {
 		cfg := &configure{
 			region:                   c.String("region"),
 			s3Bucket:                 c.String("s3-bucket"),
-			s3SrcKeyBase:             c.String("s3-src-key-base"),
-			s3DestKeyBase:            c.String("s3-dest-key-base"),
+			s3SrcPrefix:              c.String("s3-src-prefix"),
+			s3DestPrefix:             c.String("s3-dest-prefix"),
 			sqsQueueURL:              c.String("sqs-queue-url"),
 			sqsBatchWaitTime:         c.Uint("sqs-batch-wait-time"),
 			efsMountPath:             efsMouthPath,
@@ -381,7 +386,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sigkill := make(chan os.Signal)
-	signal.Notify(sigkill, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGQUIT)
+	signal.Notify(sigkill, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	go func() {
 		<-sigkill
 		signal.Stop(sigkill)
@@ -395,8 +400,16 @@ func main() {
 	}
 }
 
+type Location struct {
+	Bucket string `json:"bucket"`
+	Prefix string `json:"prefix"`
+}
+
 type task struct {
-	Path string `json:"path"`
+	Version int      `json:"version"`
+	Path    string   `json:"path"`
+	Src     Location `json:"src"`
+	Dest    Location `json:"dest"`
 }
 
 type flushTimer interface {
@@ -1257,7 +1270,18 @@ func (e *environment) ensureDestS3ObjUpdated(
 	}
 
 	select {
-	case taskCh <- &task{Path: fpath.sqs}:
+	case taskCh <- &task{
+		Version: APIVersion,
+		Path:    fpath.sqs,
+		Src: Location{
+			Bucket: e.s3Bucket,
+			Prefix: e.s3SrcPrefix,
+		},
+		Dest: Location{
+			Bucket: e.s3Bucket,
+			Prefix: e.s3DestPrefix,
+		},
+	}:
 	case <-ctx.Done():
 	}
 }
@@ -1635,12 +1659,8 @@ func (e *environment) handleRequest(
 		return filepath.Ext(n)
 	}
 
-	joinClean := func(elem ...string) string {
-		return filepath.Clean(filepath.Join(elem...))
-	}
-
 	// Sanitize and reject malicious path
-	efsAbsPath := joinClean(e.efsMountPath, path)
+	efsAbsPath := filepath.Clean(filepath.Join(e.efsMountPath, path))
 	if !strings.HasPrefix(efsAbsPath, e.efsMountPath) {
 		c.String(http.StatusBadRequest, "invalid URL path")
 		return
@@ -1662,23 +1682,23 @@ func (e *environment) handleRequest(
 
 	switch getNormalizedExtension(name) {
 	case ".jpg", ".jpeg", ".png", ".gif":
-		fpath.s3SrcKey = joinClean(e.s3SrcKeyBase, sanitizedPath)
-		fpath.s3DestKey = joinClean(e.s3DestKeyBase, sanitizedPath+".webp")
+		fpath.s3SrcKey = e.s3SrcPrefix + sanitizedPath
+		fpath.s3DestKey = e.s3DestPrefix + sanitizedPath + ".webp"
 		if supportsWebP(acceptHeader) {
 			e.respondWithGeneratedOrOriginalWhileGeneration(c, fpath, taskCh)
 		} else {
 			e.respondWithOriginalWhileGeneration(c, fpath, taskCh)
 		}
 	case ".js":
-		fpath.s3SrcKey = joinClean(e.s3SrcKeyBase, sanitizedPath)
-		fpath.s3DestKey = joinClean(e.s3DestKeyBase, sanitizedPath)
+		fpath.s3SrcKey = e.s3SrcPrefix + sanitizedPath
+		fpath.s3DestKey = e.s3DestPrefix + sanitizedPath
 		e.respondWithGeneratedOrOriginalWhileGeneration(c, fpath, taskCh)
 	case ".js.map":
-		fpath.s3DestKey = joinClean(e.s3DestKeyBase, sanitizedPath)
+		fpath.s3DestKey = e.s3DestPrefix + sanitizedPath
 		e.respondWithOriginalOrGenerated(c, fpath, taskCh)
 	case ".css":
-		fpath.s3SrcKey = joinClean(e.s3SrcKeyBase, sanitizedPath)
-		fpath.s3DestKey = joinClean(e.s3DestKeyBase, sanitizedPath)
+		fpath.s3SrcKey = e.s3SrcPrefix + sanitizedPath
+		fpath.s3DestKey = e.s3DestPrefix + sanitizedPath
 		e.respondWithGeneratedOrOriginalWhileGeneration(c, fpath, taskCh)
 	case ".min.js", ".min.css":
 		e.respondWithOriginal(c, fpath, taskCh)

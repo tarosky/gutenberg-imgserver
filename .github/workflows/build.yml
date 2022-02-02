@@ -11,11 +11,11 @@ on:
     # - dev/harai
 
 env:
-  ACCESS_KEY_ID: AKIAQGFE5ESVOYCL2ANC
+  ACCESS_KEY_ID: AKIAQGFE5ESVAHTVHJGK
   AWS_ACCOUNT_ID: '013230744746'
-  S3_BUCKET: gutenberg-modrepo-testbucket-66i59vgigq34
-  PUBLIC_CONTENT_S3_BUCKET: gutenberg-modrepo-test2bucket-1ksvqu56v9wug
-  GO_VERSION: 1.15.8
+  S3_BUCKET: gutenberg-ext-imgserver-tests3bucket-t4nafmwadd9f
+  PUBLIC_CONTENT_S3_BUCKET: gutenberg-ext-imgserver-tests3publicbucket-1aeju3m5t5nuy
+  GO_VERSION: 1.16.13
 
 jobs:
   build:
@@ -24,7 +24,7 @@ jobs:
     - uses: actions/checkout@v2
     - uses: actions/setup-go@v2
       with:
-        go-version: '^${{env.GO_VERSION}}'
+        go-version: '~${{env.GO_VERSION}}'
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
     - run: echo "$AWS_ACCOUNT_ID" > config/test/aws-account-id
     - run: echo "$S3_BUCKET" > config/test/s3-bucket
@@ -32,11 +32,27 @@ jobs:
     - run: echo "$TEST_AWS_SECRET_ACCESS_KEY" > config/test/secret-access-key
       env:
         TEST_AWS_SECRET_ACCESS_KEY: ${{secrets.TEST_AWS_SECRET_ACCESS_KEY}}
-    - run: go build -o work/imgserver .
+    - run: go get github.com/ahmetb/govvv
+    - name: Generate build number
+      uses: einaregilsson/build-number@v3
+      with:
+        token: ${{secrets.GITHUB_TOKEN}}
+        prefix: build_number_generator
+    - name: Print new build number
+      run: echo "Build number is $BUILD_NUMBER"
+    - name: Save the build number
+      run: echo "$BUILD_NUMBER" > work/BUILD_NUMBER
+    - name: Embed build number into code
+      run: echo "build-$BUILD_NUMBER" > ./VERSION
+    - run: ~/go/bin/govvv build -o work/imgserver .
     - uses: actions/upload-artifact@v2
       with:
         name: artifact
         path: work/imgserver
+    - uses: actions/upload-artifact@v2
+      with:
+        name: build-number
+        path: work/BUILD_NUMBER
 
   test:
     runs-on: ubuntu-20.04
@@ -44,7 +60,7 @@ jobs:
     - uses: actions/checkout@v2
     - uses: actions/setup-go@v2
       with:
-        go-version: '^${{env.GO_VERSION}}'
+        go-version: '~${{env.GO_VERSION}}'
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
     - run: echo "$AWS_ACCOUNT_ID" > config/test/aws-account-id
     - run: echo "$S3_BUCKET" > config/test/s3-bucket
@@ -68,19 +84,15 @@ jobs:
     - test
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-20.04
-    env:
-      BUCKET_NAME: gutenberg-modrepo-modulerepobucket-99uoevgdqlvw
     steps:
     - uses: actions/download-artifact@v2
       with:
         name: artifact
-    - name: Generate build number
-      uses: einaregilsson/build-number@v3
+    - uses: actions/download-artifact@v2
       with:
-        token: ${{secrets.GITHUB_TOKEN}}
-        prefix: build_number_generator
-    - name: Print new build number
-      run: echo "Build number is $BUILD_NUMBER"
+        name: build-number
+    - name: set BUILD_NUMBER
+      run: echo "BUILD_NUMBER=$(< ./BUILD_NUMBER)" >> $GITHUB_ENV
     - id: create_release
       uses: actions/create-release@v1
       env:
