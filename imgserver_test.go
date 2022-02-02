@@ -137,7 +137,12 @@ func (s *ImgServerSuite) assertDelayedSQSMessage(ctx context.Context, path strin
 	s.Assert().Len(msgs, 1)
 	t := &task{}
 	s.Assert().NoError(json.Unmarshal([]byte(*msgs[0].Body), t))
+	s.Assert().Equal(2, t.Version)
 	s.Assert().Equal(path, t.Path)
+	s.Assert().Equal(s.env.s3Bucket, t.Src.Bucket)
+	s.Assert().Equal(s.env.s3SrcPrefix, t.Src.Prefix)
+	s.Assert().Equal(s.env.s3Bucket, t.Dest.Bucket)
+	s.Assert().Equal(s.env.s3DestPrefix, t.Dest.Prefix)
 }
 
 func (s *ImgServerSuite) assertNoSQSMessage(ctx context.Context) {
@@ -156,7 +161,7 @@ func (s *ImgServerSuite) assertS3SrcExists(
 ) {
 	res, err := s.env.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.env.s3Bucket,
-		Key:    aws.String(s.env.s3SrcKeyBase + "/" + path),
+		Key:    aws.String(s.env.s3SrcPrefix + path),
 	})
 	s.Assert().NoError(err)
 	s.Assert().Equal(path, res.Metadata[pathMetadata])
@@ -170,7 +175,7 @@ func (s *ImgServerSuite) assertS3SrcExists(
 func (s *ImgServerSuite) assertS3SrcNotExists(ctx context.Context, path string) {
 	_, err := s.env.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.env.s3Bucket,
-		Key:    aws.String(s.env.s3SrcKeyBase + "/" + path),
+		Key:    aws.String(s.env.s3SrcPrefix + path),
 	})
 	s.Assert().NotNil(err)
 	var apiErr smithy.APIError
@@ -266,7 +271,7 @@ func (s *ImgServerSuite) uploadFileToS3Dest(
 ) string {
 	return s.uploadToS3(
 		ctx,
-		s.env.s3DestKeyBase+"/"+s3Path,
+		s.env.s3DestPrefix+s3Path,
 		bodyPath,
 		s.contentType(s3Path),
 		path,
@@ -280,7 +285,7 @@ func (s *ImgServerSuite) uploadFileToS3Src(
 ) string {
 	return s.uploadToS3(
 		ctx,
-		s.env.s3SrcKeyBase+"/"+s3Path,
+		s.env.s3SrcPrefix+s3Path,
 		bodyPath,
 		s.contentType(s3Path),
 		path,
@@ -917,8 +922,6 @@ func (s *ImgServerSuite) Test_SourceMapS3EFS() {
 }
 
 func (s *ImgServerSuite) Test_SourceMapS3NoEFS() {
-	const longTextLen = int64(1024)
-
 	eTag := s.uploadFileToS3Dest(s.ctx, sourceMapPathL, sourceMapPathL, sampleSourceMap, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + sourceMapPathL))
 
@@ -1052,11 +1055,11 @@ func (s *ImgServerSuite) FileS3NoEFS(path string) {
 }
 
 func (s *ImgServerSuite) Test_MinJSNoS3EFS() {
-	s.FileS3EFS(minJSPathL, jsMIME, sampleMinJSSize, sampleMinJSETag)
+	s.FileNoS3EFS(minJSPathL, jsMIME, sampleMinJSSize, sampleMinJSETag)
 }
 
 func (s *ImgServerSuite) Test_MinCSSNoS3EFS() {
-	s.FileS3EFS(minCSSPathL, cssMIME, sampleMinCSSSize, sampleMinCSSETag)
+	s.FileNoS3EFS(minCSSPathL, cssMIME, sampleMinCSSSize, sampleMinCSSETag)
 }
 
 func (s *ImgServerSuite) FileNoS3EFS(
