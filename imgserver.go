@@ -50,7 +50,8 @@ const (
 	eTagHeader          = "ETag"
 	lastModifiedHeader  = "Last-Modified"
 
-	s3ErrCodeNotFound = "NotFound"
+	s3ErrCodeNotFound   = "NotFound"
+	s3ErrCodeBadRequest = "BadRequest" // BadRequest occurs when key contains \ufffd.
 
 	pathMetadata      = "original-path"
 	timestampMetadata = "original-timestamp"
@@ -920,7 +921,11 @@ func (e *environment) checkEFSFileStatus(efsPath string) *efsFileStatusFuture {
 
 		stat, err := os.Stat(efsPath)
 		if err != nil {
-			if os.IsNotExist(err) {
+			// ENOTDIR error occurs when the path starts with an existing file path.
+			if os.IsNotExist(err) ||
+				errors.Is(err, syscall.ENOTDIR) ||
+				errors.Is(err, syscall.ENAMETOOLONG) {
+
 				e.log.Debug("stat: file not found", zapPathField)
 				statusCh <- &efsFileStatus{}
 				return
@@ -962,16 +967,23 @@ func (e *environment) checkDestS3ObjStatus(ctx context.Context, s3Key string) *s
 		if err != nil {
 			var apiErr smithy.APIError
 			if errors.As(err, &apiErr) {
-				if apiErr.ErrorCode() == s3ErrCodeNotFound {
+				switch apiErr.ErrorCode() {
+				case s3ErrCodeNotFound:
 					statusCh <- &s3ObjStatus{}
-					return
+				case s3ErrCodeBadRequest:
+					e.log.Info("key contains invalid chars",
+						s3KeyField,
+						zap.String("aws-code", apiErr.ErrorCode()),
+						zap.String("aws-message", apiErr.ErrorMessage()))
+					statusCh <- &s3ObjStatus{}
+				default:
+					e.log.Error("failed to HEAD object",
+						s3KeyField,
+						zap.String("aws-code", apiErr.ErrorCode()),
+						zap.String("aws-message", apiErr.ErrorMessage()))
+					statusCh <- &s3ObjStatus{err: err}
 				}
 
-				e.log.Error("failed to HEAD object",
-					s3KeyField,
-					zap.String("aws-code", apiErr.ErrorCode()),
-					zap.String("aws-message", apiErr.ErrorMessage()))
-				statusCh <- &s3ObjStatus{err: err}
 				return
 			}
 
@@ -1017,7 +1029,11 @@ func (e *environment) getEFSFileReader(ctx context.Context, efsPath string) *efs
 
 		f, err := os.Open(efsPath)
 		if err != nil {
-			if os.IsNotExist(err) {
+			// ENOTDIR error occurs when the path starts with an existing file path.
+			if os.IsNotExist(err) ||
+				errors.Is(err, syscall.ENOTDIR) ||
+				errors.Is(err, syscall.ENAMETOOLONG) {
+
 				e.log.Debug("open: file not found", zapPathField)
 				readerCh <- &efsFileReader{}
 				return
