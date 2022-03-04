@@ -297,6 +297,7 @@ const (
 	jpgPathU                  = "dir/image025.JPG"
 	jpgNonExistentPathL       = "dir/nonexistent.jpg"
 	jpgNonExistentPathU       = "dir/nonexistent.JPG"
+	jpgNotADirectoryPath      = "dir/image000.jpg/foo.jpg"
 	jsPathL                   = "dir/script.js"
 	jsNonExistentPathL        = "dir/nonexistent.js"
 	minJSPathL                = "dir/script.min.js"
@@ -308,6 +309,8 @@ const (
 
 	publicContentCacheControl = "public, max-age=86400"
 )
+
+var jpgTooLongPath = "dir/" + strings.Repeat("nonexistent", 100) + ".jpg"
 
 func (s *ImgServerSuite) Test_JPGAcceptedS3EFS_L() {
 	s.JPGAcceptedS3EFS(jpgPathL)
@@ -435,6 +438,10 @@ func (s *ImgServerSuite) Test_JPGAcceptedNoS3NoEFS_U() {
 	s.JPGAcceptedNoS3NoEFS(jpgNonExistentPathU)
 }
 
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3NoEFS_NotADir() {
+	s.JPGAcceptedNoS3NoEFS(jpgNotADirectoryPath)
+}
+
 func (s *ImgServerSuite) JPGAcceptedNoS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
@@ -454,6 +461,27 @@ func (s *ImgServerSuite) JPGAcceptedNoS3NoEFS(path string) {
 
 		s.assertNoSQSMessage(ctx)
 		s.assertS3SrcNotExists(ctx, path)
+	})
+}
+
+func (s *ImgServerSuite) Test_JPGAcceptedNoS3NoEFS_TooLong() {
+	const longTextLen = int64(1024)
+
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+jpgTooLongPath, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
+		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
+		s.Assert().Equal(plainContentType, header.contentType())
+		s.Assert().Greater(longTextLen, res.ContentLength)
+		s.Assert().Equal("", header.eTag())
+		s.Assert().Equal("", header.lastModified())
+		body, err := ioutil.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
 	})
 }
 
