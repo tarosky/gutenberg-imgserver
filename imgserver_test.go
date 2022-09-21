@@ -28,7 +28,7 @@ import (
 const (
 	cssMIME          = "text/css; charset=utf-8"
 	jpegMIME         = "image/jpeg"
-	jsMIME           = "application/javascript; charset=utf-8"
+	jsMIME           = "application/javascript"
 	oldJSMIME        = "text/javascript; charset=utf-8"
 	plainContentType = "text/plain; charset=utf-8"
 	pngMIME          = "image/png"
