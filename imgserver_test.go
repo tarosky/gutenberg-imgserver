@@ -25,12 +25,30 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
+const (
+	cssMIME          = "text/css; charset=utf-8"
+	jpegMIME         = "image/jpeg"
+	jsMIME           = "application/javascript"
+	oldJSMIME        = "text/javascript; charset=utf-8"
+	plainContentType = "text/plain; charset=utf-8"
+	pngMIME          = "image/png"
+	sourceMapMIME    = "application/octet-stream"
+	webPMIME         = "image/webp"
+)
+
 type ImgServerSuite struct {
 	*TestSuite
 }
 
 func toWebPPath(path string) string {
 	return path + ".webp"
+}
+
+func oldJSContentTypeWorkaround(contentType string) string {
+	if contentType == oldJSMIME {
+		return jsMIME
+	}
+	return contentType
 }
 
 func TestImgServerSuite(t *testing.T) {
@@ -168,7 +186,7 @@ func (s *ImgServerSuite) assertS3SrcExists(
 	t, err := time.Parse(time.RFC3339Nano, res.Metadata[timestampMetadata])
 	s.Assert().NoError(err)
 	s.Assert().Equal(lastModified.UTC(), t)
-	s.Assert().Equal(contentType, *res.ContentType)
+	s.Assert().Equal(contentType, oldJSContentTypeWorkaround(*res.ContentType))
 	s.Assert().Equal(contentLength, res.ContentLength)
 }
 
@@ -343,7 +361,7 @@ func (s *ImgServerSuite) JPGAcceptedS3EFS(path string) {
 }
 
 func (s *ImgServerSuite) Test_PublicContentJPG() {
-	keyPrefix := strings.SplitN(s.env.publicCotnentPathPattern, "/", 2)[0]
+	keyPrefix := strings.SplitN(s.env.publicCotnentPathPatterns, "/", 2)[0]
 	path := keyPrefix + "/wp-content/uploads/sample.jpg"
 	eTag := s.uploadToPublicContentS3(
 		s.ctx,
@@ -708,7 +726,7 @@ func (s *ImgServerSuite) Test_JSS3EFS() {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(jsMIME, header.contentType())
+		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
 		s.Assert().Equal(sampleMinJSSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -755,7 +773,7 @@ func (s *ImgServerSuite) Test_JSNoS3EFS() {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
-		s.Assert().Equal(jsMIME, header.contentType())
+		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
 		s.Assert().Equal(sampleJSSize, res.ContentLength)
 		s.Assert().Equal(sampleJSETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -799,7 +817,7 @@ func (s *ImgServerSuite) Test_JSS3EFSOld() {
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
-		s.Assert().Equal(jsMIME, header.contentType())
+		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
 		s.Assert().Equal(sampleJSSize, res.ContentLength)
 		s.Assert().Equal(sampleJSETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -1036,7 +1054,7 @@ func (s *ImgServerSuite) FileS3EFS(
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(contentType, header.contentType())
+		s.Assert().Equal(contentType, oldJSContentTypeWorkaround(header.contentType()))
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -1102,7 +1120,7 @@ func (s *ImgServerSuite) FileNoS3EFS(
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(contentType, header.contentType())
+		s.Assert().Equal(contentType, oldJSContentTypeWorkaround(header.contentType()))
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
