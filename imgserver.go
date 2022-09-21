@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,16 +34,6 @@ import (
 )
 
 const (
-	sourceMapMIME = "application/octet-stream"
-	gifMIME       = "image/gif"
-	jpegMIME      = "image/jpeg"
-	pngMIME       = "image/png"
-	webPMIME      = "image/webp"
-	cssMIME       = "text/css"
-	jsMIME        = "text/javascript"
-
-	plainContentType = "text/plain; charset=utf-8"
-
 	acceptHeader        = "Accept"
 	cacheControlHeader  = "Cache-Control"
 	contentLengthHeader = "Content-Length"
@@ -63,25 +54,25 @@ const (
 var Version string
 
 type configure struct {
-	region                   string
-	accessKeyID              string
-	secretAccessKey          string
-	s3Bucket                 string
-	s3SrcPrefix              string
-	s3DestPrefix             string
-	sqsQueueURL              string
-	sqsBatchWaitTime         uint
-	efsMountPath             string
-	temporaryCache           *cacheControl
-	permanentCache           *cacheControl
-	gracefulShutdownTimeout  uint
-	port                     int
-	logPath                  string
-	errorLogPath             string
-	pidFile                  string
-	publicCotnentS3Bucket    string
-	publicCotnentPathPattern string
-	publicCotnentPathGlob    glob.Glob
+	region                    string
+	accessKeyID               string
+	secretAccessKey           string
+	s3Bucket                  string
+	s3SrcPrefix               string
+	s3DestPrefix              string
+	sqsQueueURL               string
+	sqsBatchWaitTime          uint
+	efsMountPath              string
+	temporaryCache            *cacheControl
+	permanentCache            *cacheControl
+	gracefulShutdownTimeout   uint
+	port                      int
+	logPath                   string
+	errorLogPath              string
+	pidFile                   string
+	publicCotnentS3Bucket     string
+	publicCotnentPathPatterns string
+	publicCotnentPathGlob     glob.Glob
 }
 
 type cacheControl struct {
@@ -209,7 +200,13 @@ func createCloudfrontPathGlob(pattern string) glob.Glob {
 		return nil
 	}
 
-	g, err := glob.Compile(strings.TrimLeft(pattern, "/"))
+	ps := strings.Split(pattern, ",")
+	ps2 := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ps2 = append(ps2, strings.TrimLeft(p, "/"))
+	}
+
+	g, err := glob.Compile("{" + strings.Join(ps2, ",") + "}")
 	if err != nil {
 		fmt.Fprintf(
 			os.Stderr,
@@ -301,7 +298,7 @@ func main() {
 			Aliases:     []string{"pubb"},
 		},
 		&cli.StringFlag{
-			Name:        "public-content-path-pattern",
+			Name:        "public-content-path-patterns",
 			DefaultText: "",
 			Aliases:     []string{"pubp"},
 		},
@@ -327,21 +324,21 @@ func main() {
 		}
 
 		cfg := &configure{
-			region:                   c.String("region"),
-			s3Bucket:                 c.String("s3-bucket"),
-			s3SrcPrefix:              c.String("s3-src-prefix"),
-			s3DestPrefix:             c.String("s3-dest-prefix"),
-			sqsQueueURL:              c.String("sqs-queue-url"),
-			sqsBatchWaitTime:         c.Uint("sqs-batch-wait-time"),
-			efsMountPath:             efsMouthPath,
-			gracefulShutdownTimeout:  c.Uint("graceful-shutdown-timeout"),
-			port:                     c.Int("port"),
-			logPath:                  logPath,
-			errorLogPath:             errorLogPath,
-			pidFile:                  c.String("pid-file"),
-			publicCotnentS3Bucket:    c.String("public-content-s3-bucket"),
-			publicCotnentPathPattern: c.String("public-content-path-pattern"),
-			publicCotnentPathGlob:    createCloudfrontPathGlob(c.String("public-content-path-pattern")),
+			region:                    c.String("region"),
+			s3Bucket:                  c.String("s3-bucket"),
+			s3SrcPrefix:               c.String("s3-src-prefix"),
+			s3DestPrefix:              c.String("s3-dest-prefix"),
+			sqsQueueURL:               c.String("sqs-queue-url"),
+			sqsBatchWaitTime:          c.Uint("sqs-batch-wait-time"),
+			efsMountPath:              efsMouthPath,
+			gracefulShutdownTimeout:   c.Uint("graceful-shutdown-timeout"),
+			port:                      c.Int("port"),
+			logPath:                   logPath,
+			errorLogPath:              errorLogPath,
+			pidFile:                   c.String("pid-file"),
+			publicCotnentS3Bucket:     c.String("public-content-s3-bucket"),
+			publicCotnentPathPatterns: c.String("public-content-path-patterns"),
+			publicCotnentPathGlob:     createCloudfrontPathGlob(c.String("public-content-path-patterns")),
 			temporaryCache: &cacheControl{
 				name:  "temporary",
 				value: fmt.Sprintf("public, max-age=%d", c.Uint("temp-resp-max-age")),
@@ -1243,29 +1240,12 @@ func (e *environment) ensureDestS3ObjUpdated(
 	}
 
 	if !isEFSNull(fileReaderFut, fileStatusFut) {
-		var contentType string
-		switch strings.ToLower(filepath.Ext(fpath.s3SrcKey)) {
-		case ".jpg", ".jpeg":
-			contentType = jpegMIME
-		case ".png":
-			contentType = pngMIME
-		case ".gif":
-			contentType = gifMIME
-		case ".js":
-			contentType = jsMIME
-		case ".css":
-			contentType = cssMIME
-		default:
-			e.log.Error("unknown extension", zapPathField)
-			return
-		}
-
 		tsStr := fileStatusFut.get().time.Format(time.RFC3339Nano)
 		if _, err := e.s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      &e.s3Bucket,
 			Key:         &fpath.s3SrcKey,
 			Body:        fileReaderFut.get().reader,
-			ContentType: &contentType,
+			ContentType: aws.String(e.contentType(fpath.s3SrcKey)),
 			Metadata: map[string]string{
 				pathMetadata:      fpath.path,
 				timestampMetadata: tsStr,
@@ -1373,25 +1353,11 @@ func (e *environment) respondWithPublicContentS3Object(
 }
 
 func (e *environment) contentType(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".jpg", ".jpeg":
-		return jpegMIME
-	case ".png":
-		return pngMIME
-	case ".gif":
-		return gifMIME
-	case ".webp":
-		return webPMIME
-	case ".js":
-		return jsMIME
-	case ".map":
-		return sourceMapMIME
-	case ".css":
-		return cssMIME
-	default:
-		e.log.Error("unknown content type", zap.String("path", path))
+	ct := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	if ct == "" {
+		return "application/octet-stream"
 	}
-	return ""
+	return ct
 }
 
 func (e *environment) respondWithEFSFile(

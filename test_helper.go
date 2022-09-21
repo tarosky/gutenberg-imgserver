@@ -107,25 +107,25 @@ func getTestConfig(name string) *configure {
 		readTestConfig("aws-account-id"),
 		sqsName)
 	efsPath := fmt.Sprintf("work/test/%s/%s", name, generateSafeRandomString())
-	publicCotnentPathPattern := generateSafeRandomString() + "/" + publicContentPathPattern
+	publicCotnentPathPatterns := "foobarbaz/*,/" + generateSafeRandomString() + "/" + publicContentPathPattern
 
 	cfg := &configure{
-		region:                   region,
-		accessKeyID:              readTestConfig("access-key-id"),
-		secretAccessKey:          readTestConfig("secret-access-key"),
-		s3Bucket:                 readTestConfig("s3-bucket"),
-		s3SrcPrefix:              generateSafeRandomString() + "/" + name + "/",
-		s3DestPrefix:             generateSafeRandomString() + "/" + name + "/",
-		sqsQueueURL:              sqsURL,
-		sqsBatchWaitTime:         2,
-		efsMountPath:             efsPath,
-		gracefulShutdownTimeout:  5,
-		port:                     0, // Not used
-		logPath:                  efsPath + "/imgserver.log",
-		errorLogPath:             efsPath + "/imgserver-error.log",
-		publicCotnentS3Bucket:    readTestConfig("public-content-s3-bucket"),
-		publicCotnentPathPattern: publicCotnentPathPattern,
-		publicCotnentPathGlob:    createCloudfrontPathGlob(publicCotnentPathPattern),
+		region:                    region,
+		accessKeyID:               readTestConfig("access-key-id"),
+		secretAccessKey:           readTestConfig("secret-access-key"),
+		s3Bucket:                  readTestConfig("s3-bucket"),
+		s3SrcPrefix:               generateSafeRandomString() + "/" + name + "/",
+		s3DestPrefix:              generateSafeRandomString() + "/" + name + "/",
+		sqsQueueURL:               sqsURL,
+		sqsBatchWaitTime:          2,
+		efsMountPath:              efsPath,
+		gracefulShutdownTimeout:   5,
+		port:                      0, // Not used
+		logPath:                   efsPath + "/imgserver.log",
+		errorLogPath:              efsPath + "/imgserver-error.log",
+		publicCotnentS3Bucket:     readTestConfig("public-content-s3-bucket"),
+		publicCotnentPathPatterns: publicCotnentPathPatterns,
+		publicCotnentPathGlob:     createCloudfrontPathGlob(publicCotnentPathPatterns),
 		temporaryCache: &cacheControl{
 			name:  "temporary",
 			value: fmt.Sprintf("public, max-age=%d", 20*60),

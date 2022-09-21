@@ -25,6 +25,16 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
+const (
+	cssMIME          = "text/css; charset=utf-8"
+	jpegMIME         = "image/jpeg"
+	jsMIME           = "text/javascript; charset=utf-8"
+	plainContentType = "text/plain; charset=utf-8"
+	pngMIME          = "image/png"
+	sourceMapMIME    = "application/octet-stream"
+	webPMIME         = "image/webp"
+)
+
 type ImgServerSuite struct {
 	*TestSuite
 }
@@ -343,7 +353,7 @@ func (s *ImgServerSuite) JPGAcceptedS3EFS(path string) {
 }
 
 func (s *ImgServerSuite) Test_PublicContentJPG() {
-	keyPrefix := strings.SplitN(s.env.publicCotnentPathPattern, "/", 2)[0]
+	keyPrefix := strings.SplitN(s.env.publicCotnentPathPatterns, "/", 2)[0]
 	path := keyPrefix + "/wp-content/uploads/sample.jpg"
 	eTag := s.uploadToPublicContentS3(
 		s.ctx,
