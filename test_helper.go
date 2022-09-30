@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
@@ -83,7 +82,7 @@ func readTestConfig(name string) string {
 	}
 
 	path := cwd + "/config/test/" + name
-	val, err := ioutil.ReadFile(path)
+	val, err := os.ReadFile(path)
 	if err != nil {
 		panic("failed to load config file: " + path + ", error: " + err.Error())
 	}
@@ -107,25 +106,28 @@ func getTestConfig(name string) *configure {
 		readTestConfig("aws-account-id"),
 		sqsName)
 	efsPath := fmt.Sprintf("work/test/%s/%s", name, generateSafeRandomString())
-	publicCotnentPathPatterns := "foobarbaz/*,/" + generateSafeRandomString() + "/" + publicContentPathPattern
+	publicContentPathPatterns := "/" + generateSafeRandomString() + "/" + publicContentPathPattern + ",foobarbaz/*"
+	bypassMinifierPathPatterns := "*/nominify.js"
 
 	cfg := &configure{
-		region:                    region,
-		accessKeyID:               readTestConfig("access-key-id"),
-		secretAccessKey:           readTestConfig("secret-access-key"),
-		s3Bucket:                  readTestConfig("s3-bucket"),
-		s3SrcPrefix:               generateSafeRandomString() + "/" + name + "/",
-		s3DestPrefix:              generateSafeRandomString() + "/" + name + "/",
-		sqsQueueURL:               sqsURL,
-		sqsBatchWaitTime:          2,
-		efsMountPath:              efsPath,
-		gracefulShutdownTimeout:   5,
-		port:                      0, // Not used
-		logPath:                   efsPath + "/imgserver.log",
-		errorLogPath:              efsPath + "/imgserver-error.log",
-		publicCotnentS3Bucket:     readTestConfig("public-content-s3-bucket"),
-		publicCotnentPathPatterns: publicCotnentPathPatterns,
-		publicCotnentPathGlob:     createCloudfrontPathGlob(publicCotnentPathPatterns),
+		region:                     region,
+		accessKeyID:                readTestConfig("access-key-id"),
+		secretAccessKey:            readTestConfig("secret-access-key"),
+		s3Bucket:                   readTestConfig("s3-bucket"),
+		s3SrcPrefix:                generateSafeRandomString() + "/" + name + "/",
+		s3DestPrefix:               generateSafeRandomString() + "/" + name + "/",
+		sqsQueueURL:                sqsURL,
+		sqsBatchWaitTime:           2,
+		efsMountPath:               efsPath,
+		gracefulShutdownTimeout:    5,
+		port:                       0, // Not used
+		logPath:                    efsPath + "/imgserver.log",
+		errorLogPath:               efsPath + "/imgserver-error.log",
+		publicContentS3Bucket:      readTestConfig("public-content-s3-bucket"),
+		publicContentPathPatterns:  publicContentPathPatterns,
+		publicContentPathGlob:      createPathGlob(publicContentPathPatterns),
+		bypassMinifierPathPatterns: bypassMinifierPathPatterns,
+		bypassMinifierPathGlob:     createPathGlob(bypassMinifierPathPatterns),
 		temporaryCache: &cacheControl{
 			name:  "temporary",
 			value: fmt.Sprintf("public, max-age=%d", 20*60),

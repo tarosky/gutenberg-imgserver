@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"mime"
 	"net/http"
 	"os"
@@ -54,25 +53,27 @@ const (
 var Version string
 
 type configure struct {
-	region                    string
-	accessKeyID               string
-	secretAccessKey           string
-	s3Bucket                  string
-	s3SrcPrefix               string
-	s3DestPrefix              string
-	sqsQueueURL               string
-	sqsBatchWaitTime          uint
-	efsMountPath              string
-	temporaryCache            *cacheControl
-	permanentCache            *cacheControl
-	gracefulShutdownTimeout   uint
-	port                      int
-	logPath                   string
-	errorLogPath              string
-	pidFile                   string
-	publicCotnentS3Bucket     string
-	publicCotnentPathPatterns string
-	publicCotnentPathGlob     glob.Glob
+	region                     string
+	accessKeyID                string
+	secretAccessKey            string
+	s3Bucket                   string
+	s3SrcPrefix                string
+	s3DestPrefix               string
+	sqsQueueURL                string
+	sqsBatchWaitTime           uint
+	efsMountPath               string
+	temporaryCache             *cacheControl
+	permanentCache             *cacheControl
+	gracefulShutdownTimeout    uint
+	port                       int
+	logPath                    string
+	errorLogPath               string
+	pidFile                    string
+	publicContentS3Bucket      string
+	publicContentPathPatterns  string
+	publicContentPathGlob      glob.Glob
+	bypassMinifierPathPatterns string
+	bypassMinifierPathGlob     glob.Glob
 }
 
 type cacheControl struct {
@@ -195,7 +196,7 @@ func createLogger(ctx context.Context, logPath, errorLogPath string) *zap.Logger
 		zap.WithCaller(false)).With(zap.String("version", Version))
 }
 
-func createCloudfrontPathGlob(pattern string) glob.Glob {
+func createPathGlob(pattern string) glob.Glob {
 	if pattern == "" {
 		return nil
 	}
@@ -302,6 +303,11 @@ func main() {
 			DefaultText: "",
 			Aliases:     []string{"pubp"},
 		},
+		&cli.StringFlag{
+			Name:        "bypass-minifier-path-patterns",
+			DefaultText: "",
+			Aliases:     []string{"np"},
+		},
 	}
 
 	app.Action = func(c *cli.Context) error {
@@ -324,21 +330,23 @@ func main() {
 		}
 
 		cfg := &configure{
-			region:                    c.String("region"),
-			s3Bucket:                  c.String("s3-bucket"),
-			s3SrcPrefix:               c.String("s3-src-prefix"),
-			s3DestPrefix:              c.String("s3-dest-prefix"),
-			sqsQueueURL:               c.String("sqs-queue-url"),
-			sqsBatchWaitTime:          c.Uint("sqs-batch-wait-time"),
-			efsMountPath:              efsMouthPath,
-			gracefulShutdownTimeout:   c.Uint("graceful-shutdown-timeout"),
-			port:                      c.Int("port"),
-			logPath:                   logPath,
-			errorLogPath:              errorLogPath,
-			pidFile:                   c.String("pid-file"),
-			publicCotnentS3Bucket:     c.String("public-content-s3-bucket"),
-			publicCotnentPathPatterns: c.String("public-content-path-patterns"),
-			publicCotnentPathGlob:     createCloudfrontPathGlob(c.String("public-content-path-patterns")),
+			region:                     c.String("region"),
+			s3Bucket:                   c.String("s3-bucket"),
+			s3SrcPrefix:                c.String("s3-src-prefix"),
+			s3DestPrefix:               c.String("s3-dest-prefix"),
+			sqsQueueURL:                c.String("sqs-queue-url"),
+			sqsBatchWaitTime:           c.Uint("sqs-batch-wait-time"),
+			efsMountPath:               efsMouthPath,
+			gracefulShutdownTimeout:    c.Uint("graceful-shutdown-timeout"),
+			port:                       c.Int("port"),
+			logPath:                    logPath,
+			errorLogPath:               errorLogPath,
+			pidFile:                    c.String("pid-file"),
+			publicContentS3Bucket:      c.String("public-content-s3-bucket"),
+			publicContentPathPatterns:  c.String("public-content-path-patterns"),
+			publicContentPathGlob:      createPathGlob(c.String("public-content-path-patterns")),
+			bypassMinifierPathPatterns: c.String("bypass-minifier-path-patterns"),
+			bypassMinifierPathGlob:     createPathGlob(c.String("bypass-minifier-path-patterns")),
 			temporaryCache: &cacheControl{
 				name:  "temporary",
 				value: fmt.Sprintf("public, max-age=%d", c.Uint("temp-resp-max-age")),
@@ -357,7 +365,7 @@ func main() {
 
 		if cfg.pidFile != "" {
 			pid := []byte(strconv.Itoa(os.Getpid()))
-			if err := ioutil.WriteFile(cfg.pidFile, pid, 0644); err != nil {
+			if err := os.WriteFile(cfg.pidFile, pid, 0644); err != nil {
 				log.Panic(
 					"failed to create PID file",
 					zap.String("path", cfg.pidFile),
@@ -383,7 +391,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	sigkill := make(chan os.Signal)
+	sigkill := make(chan os.Signal, 1)
 	signal.Notify(sigkill, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	go func() {
 		<-sigkill
@@ -1588,7 +1596,7 @@ func (e *environment) respondWithPublicContentBucket(c *gin.Context, fpath *file
 	s3KeyField := zap.String("key", s3Key)
 
 	res, err := e.s3Client.GetObject(c, &s3.GetObjectInput{
-		Bucket: &e.publicCotnentS3Bucket,
+		Bucket: &e.publicContentS3Bucket,
 		Key:    &s3Key,
 	})
 	if err != nil {
@@ -1643,7 +1651,7 @@ func (e *environment) handleRequest(
 
 	// Sanitize and reject malicious path
 	efsAbsPath := filepath.Clean(filepath.Join(e.efsMountPath, path))
-	if !strings.HasPrefix(efsAbsPath, e.efsMountPath) {
+	if !strings.HasPrefix(efsAbsPath, e.efsMountPath+"/") {
 		c.String(http.StatusBadRequest, "invalid URL path")
 		return
 	}
@@ -1657,8 +1665,13 @@ func (e *environment) handleRequest(
 		name: name,
 	}
 
-	if e.publicCotnentPathGlob != nil && e.publicCotnentPathGlob.Match(fpath.path) {
+	if e.publicContentPathGlob != nil && e.publicContentPathGlob.Match(fpath.path) {
 		e.respondWithPublicContentBucket(c, fpath)
+		return
+	}
+
+	if e.bypassMinifierPathGlob != nil && e.bypassMinifierPathGlob.Match(fpath.path) {
+		e.respondWithOriginal(c, fpath, taskCh)
 		return
 	}
 
