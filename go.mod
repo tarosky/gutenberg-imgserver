@@ -11,6 +11,7 @@ require (
 	github.com/aws/smithy-go v1.13.5
 	github.com/gin-gonic/gin v1.9.0
 	github.com/gobwas/glob v0.2.3
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/stretchr/testify v1.8.2
 	github.com/urfave/cli/v2 v2.25.1
 	go.uber.org/zap v1.24.0

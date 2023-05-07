@@ -127,7 +127,7 @@ func getTestConfig(name string) *configure {
 		publicContentPathPatterns:  publicContentPathPatterns,
 		publicContentPathGlob:      createPathGlob(publicContentPathPatterns),
 		bypassMinifierPathPatterns: bypassMinifierPathPatterns,
-		bypassMinifierPathGlob:     createPathGlob(bypassMinifierPathPatterns),
+		bypassMinifierPathIgnore:   createPathIgnoreGlob(bypassMinifierPathPatterns),
 		temporaryCache: &cacheControl{
 			name:  "temporary",
 			value: fmt.Sprintf("public, max-age=%d", 20*60),
