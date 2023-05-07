@@ -27,6 +27,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
 	"github.com/gobwas/glob"
+	ignore "github.com/sabhiram/go-gitignore"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -73,7 +74,7 @@ type configure struct {
 	publicContentPathPatterns  string
 	publicContentPathGlob      glob.Glob
 	bypassMinifierPathPatterns string
-	bypassMinifierPathGlob     glob.Glob
+	bypassMinifierPathIgnore   *ignore.GitIgnore
 }
 
 type cacheControl struct {
@@ -219,6 +220,14 @@ func createPathGlob(pattern string) glob.Glob {
 	return g
 }
 
+func createPathIgnoreGlob(pattern string) *ignore.GitIgnore {
+	if pattern == "" {
+		return nil
+	}
+
+	return ignore.CompileIgnoreLines(strings.Split(pattern, ",")...)
+}
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "imgserver"
@@ -346,7 +355,7 @@ func main() {
 			publicContentPathPatterns:  c.String("public-content-path-patterns"),
 			publicContentPathGlob:      createPathGlob(c.String("public-content-path-patterns")),
 			bypassMinifierPathPatterns: c.String("bypass-minifier-path-patterns"),
-			bypassMinifierPathGlob:     createPathGlob(c.String("bypass-minifier-path-patterns")),
+			bypassMinifierPathIgnore:   createPathIgnoreGlob(c.String("bypass-minifier-path-patterns")),
 			temporaryCache: &cacheControl{
 				name:  "temporary",
 				value: fmt.Sprintf("public, max-age=%d", c.Uint("temp-resp-max-age")),
@@ -1670,7 +1679,7 @@ func (e *environment) handleRequest(
 		return
 	}
 
-	if e.bypassMinifierPathGlob != nil && e.bypassMinifierPathGlob.Match(fpath.path) {
+	if e.bypassMinifierPathIgnore != nil && e.bypassMinifierPathIgnore.MatchesPath(fpath.path) {
 		e.respondWithOriginal(c, fpath, taskCh)
 		return
 	}
