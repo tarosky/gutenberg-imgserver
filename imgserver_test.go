@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -75,6 +75,7 @@ func (s *ImgServerSuite) SetupTest() {
 	copy(sampleSourceMap2, fmt.Sprintf("%s/dir/script.js.map", s.env.efsMountPath), &s.Suite)
 	copy(sampleCSS, fmt.Sprintf("%s/dir/style.css", s.env.efsMountPath), &s.Suite)
 	copy(sampleMinCSS, fmt.Sprintf("%s/dir/style.min.css", s.env.efsMountPath), &s.Suite)
+	copy(sampleJS, fmt.Sprintf("%s/dir/nominify.js", s.env.efsMountPath), &s.Suite)
 }
 
 func (s *ImgServerSuite) TearDownTest() {
@@ -251,7 +252,7 @@ func (s *ImgServerSuite) uploadToPublicContentS3(
 	}()
 
 	res, err := s.env.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:       &s.env.publicCotnentS3Bucket,
+		Bucket:       &s.env.publicContentS3Bucket,
 		Key:          &key,
 		Body:         f,
 		ContentType:  &contentType,
@@ -321,6 +322,7 @@ const (
 	minJSPathL                = "dir/script.min.js"
 	sourceMapPathL            = "dir/script.js.map"
 	sourceMapNonExistentPathL = "dir/nonexistent.js.map"
+	nominifyJSPathL           = "dir/nominify.js"
 	cssPathL                  = "dir/style.css"
 	cssNonExistentPathL       = "dir/nonexistent.css"
 	minCSSPathL               = "dir/style.min.css"
@@ -351,7 +353,7 @@ func (s *ImgServerSuite) JPGAcceptedS3EFS(path string) {
 		s.Assert().Equal(sampleJPEGWebPSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -361,7 +363,7 @@ func (s *ImgServerSuite) JPGAcceptedS3EFS(path string) {
 }
 
 func (s *ImgServerSuite) Test_PublicContentJPG() {
-	keyPrefix := strings.SplitN(s.env.publicCotnentPathPatterns, "/", 2)[0]
+	keyPrefix := strings.Split(s.env.publicContentPathPatterns, "/")[1]
 	path := keyPrefix + "/wp-content/uploads/sample.jpg"
 	eTag := s.uploadToPublicContentS3(
 		s.ctx,
@@ -379,9 +381,29 @@ func (s *ImgServerSuite) Test_PublicContentJPG() {
 		s.Assert().Equal(jpegMIME, header.contentType())
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
+	})
+}
+
+func (s *ImgServerSuite) Test_BypassMinifierJS() {
+	s.serve(func(ctx context.Context, ts *httptest.Server) {
+		res := s.request(ctx, ts, "/"+nominifyJSPathL, chromeAcceptHeader)
+
+		header := httpHeader(*res)
+		s.Assert().Equal(http.StatusOK, res.StatusCode)
+		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
+		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
+		s.Assert().Equal(sampleJSSize, res.ContentLength)
+		s.Assert().Equal(sampleJSETag, header.eTag())
+		s.Assert().Equal(sampleLastModified, header.lastModified())
+		body, err := io.ReadAll(res.Body)
+		s.Assert().NoError(err)
+		s.Assert().Len(body, int(res.ContentLength))
+
+		s.assertNoSQSMessage(ctx)
+		s.assertS3SrcNotExists(ctx, nominifyJSPathL)
 	})
 }
 
@@ -410,7 +432,7 @@ func (s *ImgServerSuite) JPGAcceptedS3NoEFS(path string) {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -439,7 +461,7 @@ func (s *ImgServerSuite) JPGAcceptedNoS3EFS(path string) {
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -473,7 +495,7 @@ func (s *ImgServerSuite) JPGAcceptedNoS3NoEFS(path string) {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -495,7 +517,7 @@ func (s *ImgServerSuite) Test_JPGAcceptedNoS3NoEFS_TooLong() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -523,7 +545,7 @@ func (s *ImgServerSuite) JPGUnacceptedS3EFS(path string) {
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -555,7 +577,7 @@ func (s *ImgServerSuite) JPGUnacceptedS3NoEFS(path string) {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -583,7 +605,7 @@ func (s *ImgServerSuite) JPGUnacceptedNoS3EFS(path string) {
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -613,7 +635,7 @@ func (s *ImgServerSuite) JPGUnacceptedNoS3NoEFS(path string) {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -643,7 +665,7 @@ func (s *ImgServerSuite) JPGAcceptedS3EFSOld(path string) {
 		s.Assert().Equal(sampleJPEGSize, res.ContentLength)
 		s.Assert().Equal(sampleJPEGETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -702,10 +724,10 @@ func (s *ImgServerSuite) Test_ReopenLogFile() {
 
 	s.env.log.Info("third message")
 
-	oldBytes, err := ioutil.ReadFile(oldLogPath)
+	oldBytes, err := os.ReadFile(oldLogPath)
 	s.Require().NoError(err)
 
-	currentBytes, err := ioutil.ReadFile(currentLogPath)
+	currentBytes, err := os.ReadFile(currentLogPath)
 	s.Require().NoError(err)
 
 	oldLog := string(oldBytes)
@@ -730,7 +752,7 @@ func (s *ImgServerSuite) Test_JSS3EFS() {
 		s.Assert().Equal(sampleMinJSSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -756,7 +778,7 @@ func (s *ImgServerSuite) Test_JSS3NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -777,7 +799,7 @@ func (s *ImgServerSuite) Test_JSNoS3EFS() {
 		s.Assert().Equal(sampleJSSize, res.ContentLength)
 		s.Assert().Equal(sampleJSETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -799,7 +821,7 @@ func (s *ImgServerSuite) Test_JSNoS3NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -821,7 +843,7 @@ func (s *ImgServerSuite) Test_JSS3EFSOld() {
 		s.Assert().Equal(sampleJSSize, res.ContentLength)
 		s.Assert().Equal(sampleJSETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -844,7 +866,7 @@ func (s *ImgServerSuite) Test_CSSS3EFS() {
 		s.Assert().Equal(sampleMinCSSSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -870,7 +892,7 @@ func (s *ImgServerSuite) Test_CSSS3NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -891,7 +913,7 @@ func (s *ImgServerSuite) Test_CSSNoS3EFS() {
 		s.Assert().Equal(sampleCSSSize, res.ContentLength)
 		s.Assert().Equal(sampleCSSETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -913,7 +935,7 @@ func (s *ImgServerSuite) Test_CSSNoS3NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -935,7 +957,7 @@ func (s *ImgServerSuite) Test_CSSS3EFSOld() {
 		s.Assert().Equal(sampleCSSSize, res.ContentLength)
 		s.Assert().Equal(sampleCSSETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -958,7 +980,7 @@ func (s *ImgServerSuite) Test_SourceMapS3EFS() {
 		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
 		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -981,7 +1003,7 @@ func (s *ImgServerSuite) Test_SourceMapS3NoEFS() {
 		s.Assert().Equal(sampleSourceMapSize, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -1001,7 +1023,7 @@ func (s *ImgServerSuite) Test_SourceMapNoS3EFS() {
 		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
 		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -1023,7 +1045,7 @@ func (s *ImgServerSuite) Test_SourceMapNoS3NoEFS() {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -1058,7 +1080,7 @@ func (s *ImgServerSuite) FileS3EFS(
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -1091,7 +1113,7 @@ func (s *ImgServerSuite) FileS3NoEFS(path string) {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -1124,7 +1146,7 @@ func (s *ImgServerSuite) FileNoS3EFS(
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
@@ -1156,7 +1178,7 @@ func (s *ImgServerSuite) FileNoS3NoEFS(path string) {
 		s.Assert().Greater(longTextLen, res.ContentLength)
 		s.Assert().Equal("", header.eTag())
 		s.Assert().Equal("", header.lastModified())
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 

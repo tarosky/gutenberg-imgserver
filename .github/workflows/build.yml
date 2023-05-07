@@ -15,14 +15,18 @@ env:
   AWS_ACCOUNT_ID: '013230744746'
   S3_BUCKET: gutenberg-ext-imgserver-tests3bucket-t4nafmwadd9f
   PUBLIC_CONTENT_S3_BUCKET: gutenberg-ext-imgserver-tests3publicbucket-1aeju3m5t5nuy
-  GO_VERSION: 1.16.13
+  GO_VERSION: 1.20.3
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build:
     runs-on: ubuntu-20.04
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions/setup-go@v2
+    - uses: actions/checkout@v3
+    - uses: actions/setup-go@v4
       with:
         go-version: '~${{env.GO_VERSION}}'
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
@@ -32,9 +36,9 @@ jobs:
     - run: echo "$TEST_AWS_SECRET_ACCESS_KEY" > config/test/secret-access-key
       env:
         TEST_AWS_SECRET_ACCESS_KEY: ${{secrets.TEST_AWS_SECRET_ACCESS_KEY}}
-    - run: go get github.com/ahmetb/govvv
+    - run: go install github.com/ahmetb/govvv@latest
     - name: Generate build number
-      uses: einaregilsson/build-number@v3
+      uses: onyxmueller/build-tag-number@v1
       with:
         token: ${{secrets.GITHUB_TOKEN}}
         prefix: build_number_generator
@@ -45,20 +49,25 @@ jobs:
     - name: Embed build number into code
       run: echo "build-$BUILD_NUMBER" > ./VERSION
     - run: ~/go/bin/govvv build -o work/imgserver .
-    - uses: actions/upload-artifact@v2
+    - uses: actions/upload-artifact@v3
       with:
         name: artifact
         path: work/imgserver
-    - uses: actions/upload-artifact@v2
+        if-no-files-found: error
+    - uses: actions/upload-artifact@v3
       with:
         name: build-number
         path: work/BUILD_NUMBER
+        if-no-files-found: error
 
   test:
     runs-on: ubuntu-20.04
+    permissions:
+      checks: write
+      pull-requests: write
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions/setup-go@v2
+    - uses: actions/checkout@v3
+    - uses: actions/setup-go@v4
       with:
         go-version: '~${{env.GO_VERSION}}'
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
@@ -68,14 +77,13 @@ jobs:
     - run: echo "$TEST_AWS_SECRET_ACCESS_KEY" > config/test/secret-access-key
       env:
         TEST_AWS_SECRET_ACCESS_KEY: ${{secrets.TEST_AWS_SECRET_ACCESS_KEY}}
-    - run: go get -u github.com/jstemmer/go-junit-report
+    - run: go install github.com/jstemmer/go-junit-report@latest
     - run: go test -v ./... 2>&1 | tee work/test.log
     - run: go-junit-report < work/test.log | tee work/report.xml
     - name: Publish Unit Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v1
+      uses: EnricoMi/publish-unit-test-result-action@v2
       if: always()
       with:
-        github_token: ${{secrets.GITHUB_TOKEN}}
         files: work/report.xml
 
   release:
@@ -85,10 +93,10 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-20.04
     steps:
-    - uses: actions/download-artifact@v2
+    - uses: actions/download-artifact@v3
       with:
         name: artifact
-    - uses: actions/download-artifact@v2
+    - uses: actions/download-artifact@v3
       with:
         name: build-number
     - name: set BUILD_NUMBER
