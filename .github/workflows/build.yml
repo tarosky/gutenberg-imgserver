@@ -15,7 +15,7 @@ env:
   AWS_ACCOUNT_ID: '013230744746'
   S3_BUCKET: gutenberg-ext-imgserver-tests3bucket-t4nafmwadd9f
   PUBLIC_CONTENT_S3_BUCKET: gutenberg-ext-imgserver-tests3publicbucket-1aeju3m5t5nuy
-  GO_VERSION: 1.20.3
+  GO_VERSION: 1.23.2
 
 defaults:
   run:
@@ -23,10 +23,10 @@ defaults:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-go@v4
+    - uses: actions/checkout@main
+    - uses: actions/setup-go@main
       with:
         go-version: '~${{env.GO_VERSION}}'
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
@@ -38,7 +38,7 @@ jobs:
         TEST_AWS_SECRET_ACCESS_KEY: ${{secrets.TEST_AWS_SECRET_ACCESS_KEY}}
     - run: go install github.com/ahmetb/govvv@latest
     - name: Generate build number
-      uses: onyxmueller/build-tag-number@v1
+      uses: onyxmueller/build-tag-number@main
       with:
         token: ${{secrets.GITHUB_TOKEN}}
         prefix: build_number_generator
@@ -49,25 +49,25 @@ jobs:
     - name: Embed build number into code
       run: echo "build-$BUILD_NUMBER" > ./VERSION
     - run: ~/go/bin/govvv build -o work/imgserver .
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@main
       with:
         name: artifact
         path: work/imgserver
         if-no-files-found: error
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@main
       with:
         name: build-number
         path: work/BUILD_NUMBER
         if-no-files-found: error
 
   test:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     permissions:
       checks: write
       pull-requests: write
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-go@v4
+    - uses: actions/checkout@main
+    - uses: actions/setup-go@main
       with:
         go-version: '~${{env.GO_VERSION}}'
     - run: echo "$ACCESS_KEY_ID" > config/test/access-key-id
@@ -81,7 +81,7 @@ jobs:
     - run: go test -v ./... 2>&1 | tee work/test.log
     - run: go-junit-report < work/test.log | tee work/report.xml
     - name: Publish Unit Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2
+      uses: EnricoMi/publish-unit-test-result-action@master
       if: always()
       with:
         files: work/report.xml
@@ -90,19 +90,19 @@ jobs:
     needs:
     - build
     - test
-    if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-20.04
+    if: github.ref == 'refs/heads/issue/53'
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@main
       with:
         name: artifact
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@main
       with:
         name: build-number
     - name: set BUILD_NUMBER
       run: echo "BUILD_NUMBER=$(< ./BUILD_NUMBER)" >> $GITHUB_ENV
     - id: create_release
-      uses: actions/create-release@v1
+      uses: actions/create-release@main
       env:
         GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
       with:
@@ -110,7 +110,7 @@ jobs:
         release_name: Build ${{env.BUILD_NUMBER}}
         draft: false
         prerelease: false
-    - uses: actions/upload-release-asset@v1
+    - uses: actions/upload-release-asset@main
       env:
         GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
       with:

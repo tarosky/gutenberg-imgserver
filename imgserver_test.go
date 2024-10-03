@@ -175,7 +175,7 @@ func (s *ImgServerSuite) assertS3SrcExists(
 	s.Assert().NoError(err)
 	s.Assert().Equal(lastModified.UTC(), t)
 	s.Assert().Equal(contentType, *res.ContentType)
-	s.Assert().Equal(contentLength, res.ContentLength)
+	s.Assert().Equal(contentLength, *res.ContentLength)
 }
 
 func (s *ImgServerSuite) assertS3SrcNotExists(ctx context.Context, path string) {
