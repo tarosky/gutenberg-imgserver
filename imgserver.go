@@ -1119,10 +1119,10 @@ func (e *environment) getDestS3ObjReader(ctx context.Context, s3Key string) *s3O
 					eTag: *res.ETag,
 					time: &t,
 				},
-				contentLength: res.ContentLength,
+				contentLength: *res.ContentLength,
 				reader: &s3Body{
 					body: res.Body,
-					size: res.ContentLength,
+					size: *res.ContentLength,
 					log:  e.log,
 				},
 			}
@@ -1341,7 +1341,7 @@ func (e *environment) respondWithPublicContentS3Object(
 ) {
 	body := &s3Body{
 		body: res.Body,
-		size: res.ContentLength,
+		size: *res.ContentLength,
 		log:  e.log,
 	}
 	defer func() {
