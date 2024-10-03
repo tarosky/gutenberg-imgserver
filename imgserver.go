@@ -1030,7 +1030,7 @@ func (e *environment) checkDestS3ObjStatus(ctx context.Context, s3Key string) *s
 	return fut
 }
 
-func (e *environment) getEFSFileReader(ctx context.Context, efsPath string) *efsFileReaderFuture {
+func (e *environment) getEFSFileReader(efsPath string) *efsFileReaderFuture {
 	readerCh := make(chan *efsFileReader)
 	fut := &efsFileReaderFuture{
 		ch: readerCh,
@@ -1242,7 +1242,7 @@ func (e *environment) ensureDestS3ObjUpdated(
 	}
 
 	if fileReaderFut == nil {
-		fileReaderFut = e.getEFSFileReader(ctx, fpath.efs)
+		fileReaderFut = e.getEFSFileReader(fpath.efs)
 		defer func() {
 			if err := fileReaderFut.get().Close(); err != nil {
 				e.log.Error("failed to close EFS file", zapPathField, zap.Error(err))
@@ -1405,7 +1405,7 @@ func (e *environment) respondWithOriginalWhileGeneration(
 	taskCh chan<- *task,
 ) {
 	fileStatusFut := e.checkEFSFileStatus(fpath.efs)
-	fileReaderFut := e.getEFSFileReader(c, fpath.efs)
+	fileReaderFut := e.getEFSFileReader(fpath.efs)
 	destStatusFut := e.checkDestS3ObjStatus(c, fpath.s3DestKey)
 	defer func() {
 		// Ensure each goroutine is finished.
@@ -1489,12 +1489,12 @@ func (e *environment) respondWithGeneratedOrOriginalWhileGeneration(
 			"Generated file is requested but the original one will be responded due to error on S3",
 			zap.String("path", fpath.efs),
 			zap.Error(destReaderFut.get().err))
-		fileReaderFut = e.getEFSFileReader(c, fpath.efs)
+		fileReaderFut = e.getEFSFileReader(fpath.efs)
 		e.respondTemporarily(c, fpath, fileStatusFut, fileReaderFut)
 	} else if timeExistsAndEqual(fileStatusFut, destReaderFut) {
 		e.respondWithS3Object(c, fpath, destReaderFut.get())
 	} else {
-		fileReaderFut = e.getEFSFileReader(c, fpath.efs)
+		fileReaderFut = e.getEFSFileReader(fpath.efs)
 		e.respondTemporarily(c, fpath, fileStatusFut, fileReaderFut)
 	}
 
@@ -1508,70 +1508,9 @@ func (e *environment) respondWithGeneratedOrOriginalWhileGeneration(
 	)
 }
 
-func (e *environment) respondWithOriginalOrGenerated(
-	c *gin.Context,
-	fpath *filePath,
-	taskCh chan<- *task,
-) {
+func (e *environment) respondWithOriginal(c *gin.Context, fpath *filePath) {
 	fileStatusFut := e.checkEFSFileStatus(fpath.efs)
-	fileReaderFut := e.getEFSFileReader(c, fpath.efs)
-	defer func() {
-		// Ensure each goroutine is finished.
-		if err := fileReaderFut.get().Close(); err != nil {
-			e.log.Error("failed to close EFS file",
-				zap.Error(err),
-				zap.String("path", fpath.efs))
-		}
-		fileStatusFut.get()
-	}()
-
-	if hasErrorInEFS(fileReaderFut, fileStatusFut) {
-		e.log.Error("failed to get file on EFS",
-			zap.String("path", fpath.efs),
-			zap.NamedError("readerErr", fileReaderFut.get().err),
-			zap.NamedError("statusErr", fileStatusFut.get().err))
-		e.respondWithInternalServerErrorText(c, fpath)
-		return
-	}
-
-	if !isEFSNull(fileReaderFut, fileStatusFut) {
-		e.respondWithEFSFile(
-			c, fpath, fileStatusFut.get(), fileReaderFut.get().reader, e.permanentCache)
-		return
-	}
-
-	destReaderFut := e.getDestS3ObjReader(c, fpath.s3DestKey)
-	defer func() {
-		if err := destReaderFut.get().Close(); err != nil {
-			e.log.Error("failed to close object body",
-				zap.Error(err),
-				zap.String("path", fpath.s3DestKey))
-		}
-	}()
-
-	if destReaderFut.get().err != nil {
-		e.log.Error("failed to GET S3 object",
-			zap.String("path", fpath.s3DestKey),
-			zap.Error(destReaderFut.get().err))
-		e.respondWithInternalServerErrorText(c, fpath)
-		return
-	}
-
-	if destReaderFut.get().reader == nil {
-		e.respondWithNotFoundText(c, fpath)
-		return
-	}
-
-	e.respondWithS3Object(c, fpath, destReaderFut.get())
-}
-
-func (e *environment) respondWithOriginal(
-	c *gin.Context,
-	fpath *filePath,
-	taskCh chan<- *task,
-) {
-	fileStatusFut := e.checkEFSFileStatus(fpath.efs)
-	fileReaderFut := e.getEFSFileReader(c, fpath.efs)
+	fileReaderFut := e.getEFSFileReader(fpath.efs)
 	defer func() {
 		// Ensure each goroutine is finished.
 		if err := fileReaderFut.get().Close(); err != nil {
@@ -1644,8 +1583,6 @@ func (e *environment) handleRequest(
 	getNormalizedExtension := func(name string) string {
 		n := strings.ToLower(name)
 		extExt := []string{
-			".js.map",
-			".min.js",
 			".min.css",
 		}
 
@@ -1680,7 +1617,7 @@ func (e *environment) handleRequest(
 	}
 
 	if e.bypassMinifierPathIgnore != nil && e.bypassMinifierPathIgnore.MatchesPath(fpath.path) {
-		e.respondWithOriginal(c, fpath, taskCh)
+		e.respondWithOriginal(c, fpath)
 		return
 	}
 
@@ -1693,21 +1630,14 @@ func (e *environment) handleRequest(
 		} else {
 			e.respondWithOriginalWhileGeneration(c, fpath, taskCh)
 		}
-	case ".js":
-		fpath.s3SrcKey = e.s3SrcPrefix + sanitizedPath
-		fpath.s3DestKey = e.s3DestPrefix + sanitizedPath
-		e.respondWithGeneratedOrOriginalWhileGeneration(c, fpath, taskCh)
-	case ".js.map":
-		fpath.s3DestKey = e.s3DestPrefix + sanitizedPath
-		e.respondWithOriginalOrGenerated(c, fpath, taskCh)
 	case ".css":
 		fpath.s3SrcKey = e.s3SrcPrefix + sanitizedPath
 		fpath.s3DestKey = e.s3DestPrefix + sanitizedPath
 		e.respondWithGeneratedOrOriginalWhileGeneration(c, fpath, taskCh)
-	case ".min.js", ".min.css":
-		e.respondWithOriginal(c, fpath, taskCh)
+	case ".min.css":
+		e.respondWithOriginal(c, fpath)
 	default:
 		e.log.Warn("unknown file type", zap.String("path", path))
-		e.respondWithOriginal(c, fpath, taskCh)
+		e.respondWithOriginal(c, fpath)
 	}
 }
