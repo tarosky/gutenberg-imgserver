@@ -20,27 +20,21 @@ import (
 )
 
 const (
-	sampleJPEG       = "samplefile/image.jpg"
-	sampleJPEGWebP   = "samplefile/image.jpg.webp"
-	samplePNG        = "samplefile/image.png"
-	samplePNGWebP    = "samplefile/image.png.webp"
-	sampleJS         = "samplefile/script.js"
-	sampleMinJS      = "samplefile/script.min.js"
-	sampleSourceMap  = "samplefile/script.js.map"
-	sampleSourceMap2 = "samplefile/script2.js.map"
-	sampleCSS        = "samplefile/style.css"
-	sampleMinCSS     = "samplefile/style.min.css"
+	sampleJPEG        = "samplefile/image.jpg"
+	sampleJPEGWebP    = "samplefile/image.jpg.webp"
+	samplePNG         = "samplefile/image.png"
+	samplePNGWebP     = "samplefile/image.png.webp"
+	sampleCSS         = "samplefile/style.css"
+	sampleMinCSS      = "samplefile/style.min.css"
+	sampleNominifyCSS = "samplefile/nominify.css"
 
-	sampleJPEGSize       = int64(23838)
-	sampleJPEGWebPSize   = int64(5294)
-	samplePNGSize        = int64(28877)
-	samplePNGWebPSize    = int64(5138)
-	sampleJSSize         = int64(335)
-	sampleMinJSSize      = int64(285)
-	sampleSourceMapSize  = int64(723)
-	sampleSourceMap2Size = int64(276)
-	sampleCSSSize        = int64(91)
-	sampleMinCSSSize     = int64(58)
+	sampleJPEGSize        = int64(23838)
+	sampleJPEGWebPSize    = int64(5294)
+	samplePNGSize         = int64(28877)
+	samplePNGWebPSize     = int64(5138)
+	sampleCSSSize         = int64(91)
+	sampleMinCSSSize      = int64(58)
+	sampleNominifyCSSSize = int64(91)
 
 	chromeAcceptHeader    = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
 	oldSafariAcceptHeader = "image/png,image/svg+xml,image/*;q=0.8,video/*;q=0.8,*/*;q=0.5"
@@ -53,15 +47,13 @@ func sampleETag(size int64) string {
 }
 
 var (
-	oldModTime           = time.Date(2019, time.January, 1, 0, 0, 0, 0, time.UTC)
-	sampleModTime        = time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
-	sampleLastModified   = sampleModTime.Format(http.TimeFormat)
-	sampleJPEGETag       = sampleETag(sampleJPEGSize)
-	sampleJSETag         = sampleETag(sampleJSSize)
-	sampleMinJSETag      = sampleETag(sampleMinJSSize)
-	sampleCSSETag        = sampleETag(sampleCSSSize)
-	sampleMinCSSETag     = sampleETag(sampleMinCSSSize)
-	sampleSourceMap2ETag = sampleETag(sampleSourceMap2Size)
+	oldModTime            = time.Date(2019, time.January, 1, 0, 0, 0, 0, time.UTC)
+	sampleModTime         = time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
+	sampleLastModified    = sampleModTime.Format(http.TimeFormat)
+	sampleJPEGETag        = sampleETag(sampleJPEGSize)
+	sampleCSSETag         = sampleETag(sampleCSSSize)
+	sampleMinCSSETag      = sampleETag(sampleMinCSSSize)
+	sampleNominifyCSSETag = sampleETag(sampleNominifyCSSSize)
 )
 
 // InitTest moves working directory to project root directory.
@@ -107,7 +99,7 @@ func getTestConfig(name string) *configure {
 		sqsName)
 	efsPath := fmt.Sprintf("work/test/%s/%s", name, generateSafeRandomString())
 	publicContentPathPatterns := "/" + generateSafeRandomString() + "/" + publicContentPathPattern + ",foobarbaz/*"
-	bypassMinifierPathPatterns := "*/nominify.js"
+	bypassMinifierPathPatterns := "*/nominify.css"
 
 	cfg := &configure{
 		region:                     region,

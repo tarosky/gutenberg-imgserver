@@ -28,11 +28,8 @@ import (
 const (
 	cssMIME          = "text/css; charset=utf-8"
 	jpegMIME         = "image/jpeg"
-	jsMIME           = "application/javascript"
-	oldJSMIME        = "text/javascript; charset=utf-8"
 	plainContentType = "text/plain; charset=utf-8"
 	pngMIME          = "image/png"
-	sourceMapMIME    = "application/octet-stream"
 	webPMIME         = "image/webp"
 )
 
@@ -42,13 +39,6 @@ type ImgServerSuite struct {
 
 func toWebPPath(path string) string {
 	return path + ".webp"
-}
-
-func oldJSContentTypeWorkaround(contentType string) string {
-	if contentType == oldJSMIME {
-		return jsMIME
-	}
-	return contentType
 }
 
 func TestImgServerSuite(t *testing.T) {
@@ -70,12 +60,9 @@ func (s *ImgServerSuite) SetupTest() {
 		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.JPG", s.env.efsMountPath, i), &s.Suite)
 		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.PNG", s.env.efsMountPath, i), &s.Suite)
 	}
-	copy(sampleJS, fmt.Sprintf("%s/dir/script.js", s.env.efsMountPath), &s.Suite)
-	copy(sampleMinJS, fmt.Sprintf("%s/dir/script.min.js", s.env.efsMountPath), &s.Suite)
-	copy(sampleSourceMap2, fmt.Sprintf("%s/dir/script.js.map", s.env.efsMountPath), &s.Suite)
 	copy(sampleCSS, fmt.Sprintf("%s/dir/style.css", s.env.efsMountPath), &s.Suite)
 	copy(sampleMinCSS, fmt.Sprintf("%s/dir/style.min.css", s.env.efsMountPath), &s.Suite)
-	copy(sampleJS, fmt.Sprintf("%s/dir/nominify.js", s.env.efsMountPath), &s.Suite)
+	copy(sampleNominifyCSS, fmt.Sprintf("%s/dir/nominify.css", s.env.efsMountPath), &s.Suite)
 }
 
 func (s *ImgServerSuite) TearDownTest() {
@@ -187,7 +174,7 @@ func (s *ImgServerSuite) assertS3SrcExists(
 	t, err := time.Parse(time.RFC3339Nano, res.Metadata[timestampMetadata])
 	s.Assert().NoError(err)
 	s.Assert().Equal(lastModified.UTC(), t)
-	s.Assert().Equal(contentType, oldJSContentTypeWorkaround(*res.ContentType))
+	s.Assert().Equal(contentType, *res.ContentType)
 	s.Assert().Equal(contentLength, res.ContentLength)
 }
 
@@ -271,10 +258,6 @@ func (s *ImgServerSuite) contentType(path string) string {
 		return pngMIME
 	case ".webp":
 		return webPMIME
-	case ".js":
-		return jsMIME
-	case ".map":
-		return sourceMapMIME
 	case ".css":
 		return cssMIME
 	default:
@@ -312,20 +295,15 @@ func (s *ImgServerSuite) uploadFileToS3Src(
 }
 
 const (
-	jpgPathL                  = "dir/image000.jpg"
-	jpgPathU                  = "dir/image025.JPG"
-	jpgNonExistentPathL       = "dir/nonexistent.jpg"
-	jpgNonExistentPathU       = "dir/nonexistent.JPG"
-	jpgNotADirectoryPath      = "dir/image000.jpg/foo.jpg"
-	jsPathL                   = "dir/script.js"
-	jsNonExistentPathL        = "dir/nonexistent.js"
-	minJSPathL                = "dir/script.min.js"
-	sourceMapPathL            = "dir/script.js.map"
-	sourceMapNonExistentPathL = "dir/nonexistent.js.map"
-	nominifyJSPathL           = "dir/nominify.js"
-	cssPathL                  = "dir/style.css"
-	cssNonExistentPathL       = "dir/nonexistent.css"
-	minCSSPathL               = "dir/style.min.css"
+	jpgPathL             = "dir/image000.jpg"
+	jpgPathU             = "dir/image025.JPG"
+	jpgNonExistentPathL  = "dir/nonexistent.jpg"
+	jpgNonExistentPathU  = "dir/nonexistent.JPG"
+	jpgNotADirectoryPath = "dir/image000.jpg/foo.jpg"
+	cssPathL             = "dir/style.css"
+	cssNonExistentPathL  = "dir/nonexistent.css"
+	minCSSPathL          = "dir/style.min.css"
+	nominifyCSSPathL     = "dir/nominify.css"
 
 	publicContentCacheControl = "public, max-age=86400"
 )
@@ -387,23 +365,23 @@ func (s *ImgServerSuite) Test_PublicContentJPG() {
 	})
 }
 
-func (s *ImgServerSuite) Test_BypassMinifierJS() {
+func (s *ImgServerSuite) Test_BypassMinifier() {
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+nominifyJSPathL, chromeAcceptHeader)
+		res := s.request(ctx, ts, "/"+nominifyCSSPathL, chromeAcceptHeader)
 
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
-		s.Assert().Equal(sampleJSSize, res.ContentLength)
-		s.Assert().Equal(sampleJSETag, header.eTag())
+		s.Assert().Equal(cssMIME, header.contentType())
+		s.Assert().Equal(sampleNominifyCSSSize, res.ContentLength)
+		s.Assert().Equal(sampleNominifyCSSETag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
 		body, err := io.ReadAll(res.Body)
 		s.Assert().NoError(err)
 		s.Assert().Len(body, int(res.ContentLength))
 
 		s.assertNoSQSMessage(ctx)
-		s.assertS3SrcNotExists(ctx, nominifyJSPathL)
+		s.assertS3SrcNotExists(ctx, nominifyCSSPathL)
 	})
 }
 
@@ -739,120 +717,6 @@ func (s *ImgServerSuite) Test_ReopenLogFile() {
 	s.Assert().Contains(currentLog, "third")
 }
 
-func (s *ImgServerSuite) Test_JSS3EFS() {
-	eTag := s.uploadFileToS3Dest(s.ctx, jsPathL, jsPathL, sampleMinJS, nil)
-
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
-		s.Assert().Equal(sampleMinJSSize, res.ContentLength)
-		s.Assert().Equal(eTag, header.eTag())
-		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertNoSQSMessage(ctx)
-		s.assertS3SrcNotExists(ctx, jsPathL)
-	})
-}
-
-func (s *ImgServerSuite) Test_JSS3NoEFS() {
-	const longTextLen = int64(1024)
-
-	s.uploadFileToS3Dest(s.ctx, jsPathL, jsPathL, sampleMinJS, nil)
-	s.uploadFileToS3Src(s.ctx, jsPathL, jsPathL, sampleJS, nil)
-	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + jsPathL))
-
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
-		s.Assert().Equal(plainContentType, header.contentType())
-		s.Assert().Greater(longTextLen, res.ContentLength)
-		s.Assert().Equal("", header.eTag())
-		s.Assert().Equal("", header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertDelayedSQSMessage(ctx, jsPathL)
-		// Ensure source file on S3 is also removed
-		s.assertS3SrcNotExists(ctx, jsPathL)
-	})
-}
-
-func (s *ImgServerSuite) Test_JSNoS3EFS() {
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
-		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
-		s.Assert().Equal(sampleJSSize, res.ContentLength)
-		s.Assert().Equal(sampleJSETag, header.eTag())
-		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertDelayedSQSMessage(ctx, jsPathL)
-		s.assertS3SrcExists(ctx, jsPathL, &sampleModTime, jsMIME, sampleJSSize)
-	})
-}
-
-func (s *ImgServerSuite) Test_JSNoS3NoEFS() {
-	const longTextLen = int64(1024)
-
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+jsNonExistentPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
-		s.Assert().Equal(plainContentType, header.contentType())
-		s.Assert().Greater(longTextLen, res.ContentLength)
-		s.Assert().Equal("", header.eTag())
-		s.Assert().Equal("", header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertNoSQSMessage(ctx)
-		s.assertS3SrcNotExists(ctx, jsNonExistentPathL)
-	})
-}
-
-func (s *ImgServerSuite) Test_JSS3EFSOld() {
-	s.uploadFileToS3Dest(s.ctx, jsPathL, toWebPPath(jsPathL), sampleMinJS, &oldModTime)
-
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+jsPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
-		s.Assert().Equal(jsMIME, oldJSContentTypeWorkaround(header.contentType()))
-		s.Assert().Equal(sampleJSSize, res.ContentLength)
-		s.Assert().Equal(sampleJSETag, header.eTag())
-		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		// Send message to update S3 object
-		s.assertDelayedSQSMessage(ctx, jsPathL)
-		s.assertS3SrcExists(ctx, jsPathL, &sampleModTime, jsMIME, sampleJSSize)
-	})
-}
-
 func (s *ImgServerSuite) Test_CSSS3EFS() {
 	eTag := s.uploadFileToS3Dest(s.ctx, cssPathL, cssPathL, sampleMinCSS, nil)
 
@@ -967,97 +831,6 @@ func (s *ImgServerSuite) Test_CSSS3EFSOld() {
 	})
 }
 
-func (s *ImgServerSuite) Test_SourceMapS3EFS() {
-	s.uploadFileToS3Dest(s.ctx, sourceMapPathL, sourceMapPathL, sampleSourceMap, nil)
-
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+sourceMapPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(sourceMapMIME, header.contentType())
-		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
-		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
-		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertNoSQSMessage(ctx)
-		s.assertS3SrcNotExists(ctx, sourceMapPathL)
-	})
-}
-
-func (s *ImgServerSuite) Test_SourceMapS3NoEFS() {
-	eTag := s.uploadFileToS3Dest(s.ctx, sourceMapPathL, sourceMapPathL, sampleSourceMap, nil)
-	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + sourceMapPathL))
-
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+sourceMapPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(sourceMapMIME, header.contentType())
-		s.Assert().Equal(sampleSourceMapSize, res.ContentLength)
-		s.Assert().Equal(eTag, header.eTag())
-		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertNoSQSMessage(ctx)
-		s.assertS3SrcNotExists(ctx, sourceMapPathL)
-	})
-}
-
-func (s *ImgServerSuite) Test_SourceMapNoS3EFS() {
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+sourceMapPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusOK, res.StatusCode)
-		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(sourceMapMIME, header.contentType())
-		s.Assert().Equal(sampleSourceMap2Size, res.ContentLength)
-		s.Assert().Equal(sampleSourceMap2ETag, header.eTag())
-		s.Assert().Equal(sampleLastModified, header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertNoSQSMessage(ctx)
-		s.assertS3SrcNotExists(ctx, sourceMapPathL)
-	})
-}
-
-func (s *ImgServerSuite) Test_SourceMapNoS3NoEFS() {
-	const longTextLen = int64(1024)
-
-	s.serve(func(ctx context.Context, ts *httptest.Server) {
-		res := s.request(ctx, ts, "/"+sourceMapNonExistentPathL, chromeAcceptHeader)
-
-		header := httpHeader(*res)
-		s.Assert().Equal(http.StatusNotFound, res.StatusCode)
-		s.Assert().Equal(s.env.configure.temporaryCache.value, header.cacheControl())
-		s.Assert().Equal(plainContentType, header.contentType())
-		s.Assert().Greater(longTextLen, res.ContentLength)
-		s.Assert().Equal("", header.eTag())
-		s.Assert().Equal("", header.lastModified())
-		body, err := io.ReadAll(res.Body)
-		s.Assert().NoError(err)
-		s.Assert().Len(body, int(res.ContentLength))
-
-		s.assertNoSQSMessage(ctx)
-		s.assertS3SrcNotExists(ctx, sourceMapNonExistentPathL)
-	})
-}
-
-func (s *ImgServerSuite) Test_MinJSS3EFS() {
-	s.FileS3EFS(minJSPathL, jsMIME, sampleMinJSSize, sampleMinJSETag)
-}
-
 func (s *ImgServerSuite) Test_MinCSSS3EFS() {
 	s.FileS3EFS(minCSSPathL, cssMIME, sampleMinCSSSize, sampleMinCSSETag)
 }
@@ -1068,7 +841,7 @@ func (s *ImgServerSuite) FileS3EFS(
 	size int64,
 	eTag string,
 ) {
-	s.uploadFileToS3Dest(s.ctx, path, path, sampleSourceMap, nil)
+	s.uploadFileToS3Dest(s.ctx, path, path, sampleJPEG, nil)
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
@@ -1076,7 +849,7 @@ func (s *ImgServerSuite) FileS3EFS(
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(contentType, oldJSContentTypeWorkaround(header.contentType()))
+		s.Assert().Equal(contentType, header.contentType())
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -1089,10 +862,6 @@ func (s *ImgServerSuite) FileS3EFS(
 	})
 }
 
-func (s *ImgServerSuite) Test_MinJSS3NoEFS() {
-	s.FileS3NoEFS(minJSPathL)
-}
-
 func (s *ImgServerSuite) Test_MinCSSS3NoEFS() {
 	s.FileS3NoEFS(minCSSPathL)
 }
@@ -1100,7 +869,7 @@ func (s *ImgServerSuite) Test_MinCSSS3NoEFS() {
 func (s *ImgServerSuite) FileS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
-	s.uploadFileToS3Dest(s.ctx, path, path, sampleSourceMap, nil)
+	s.uploadFileToS3Dest(s.ctx, path, path, sampleJPEG, nil)
 	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
@@ -1122,10 +891,6 @@ func (s *ImgServerSuite) FileS3NoEFS(path string) {
 	})
 }
 
-func (s *ImgServerSuite) Test_MinJSNoS3EFS() {
-	s.FileNoS3EFS(minJSPathL, jsMIME, sampleMinJSSize, sampleMinJSETag)
-}
-
 func (s *ImgServerSuite) Test_MinCSSNoS3EFS() {
 	s.FileNoS3EFS(minCSSPathL, cssMIME, sampleMinCSSSize, sampleMinCSSETag)
 }
@@ -1142,7 +907,7 @@ func (s *ImgServerSuite) FileNoS3EFS(
 		header := httpHeader(*res)
 		s.Assert().Equal(http.StatusOK, res.StatusCode)
 		s.Assert().Equal(s.env.configure.permanentCache.value, header.cacheControl())
-		s.Assert().Equal(contentType, oldJSContentTypeWorkaround(header.contentType()))
+		s.Assert().Equal(contentType, header.contentType())
 		s.Assert().Equal(size, res.ContentLength)
 		s.Assert().Equal(eTag, header.eTag())
 		s.Assert().Equal(sampleLastModified, header.lastModified())
@@ -1153,10 +918,6 @@ func (s *ImgServerSuite) FileNoS3EFS(
 		s.assertNoSQSMessage(ctx)
 		s.assertS3SrcNotExists(ctx, path)
 	})
-}
-
-func (s *ImgServerSuite) Test_MinJSNoS3NoEFS() {
-	s.FileNoS3NoEFS(minJSPathL)
 }
 
 func (s *ImgServerSuite) Test_MinCSSNoS3NoEFS() {
