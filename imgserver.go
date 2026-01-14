@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqst "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/aws/smithy-go"
+	"github.com/coreos/go-systemd/daemon"
 	"github.com/gin-gonic/gin"
 	"github.com/gobwas/glob"
 	ignore "github.com/sabhiram/go-gitignore"
@@ -62,7 +64,7 @@ type configure struct {
 	s3DestPrefix               string
 	sqsQueueURL                string
 	sqsBatchWaitTime           uint
-	efsMountPath               string
+	basePathMap                map[string]string
 	temporaryCache             *cacheControl
 	permanentCache             *cacheControl
 	gracefulShutdownTimeout    uint
@@ -228,6 +230,29 @@ func createPathIgnoreGlob(pattern string) *ignore.GitIgnore {
 	return ignore.CompileIgnoreLines(strings.Split(pattern, ",")...)
 }
 
+func createBasePathMap(basePathMap string) (map[string]string, error) {
+	kvs := strings.Split(basePathMap, ",")
+	bpm := make(map[string]string, len(kvs))
+	for _, kv := range kvs {
+		if kv == "" {
+			continue
+		}
+
+		ss := strings.SplitN(kv, "=", 2)
+		if len(ss) != 2 {
+			return nil, fmt.Errorf("invalid base-path-map value: %s", basePathMap)
+		}
+
+		path, err := filepath.Abs(ss[1])
+		if err != nil {
+			return nil, err
+		}
+		bpm[ss[0]] = strings.TrimSuffix(path, "/")
+	}
+
+	return bpm, nil
+}
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "imgserver"
@@ -264,8 +289,8 @@ func main() {
 			Value:   60,
 		},
 		&cli.StringFlag{
-			Name:     "efs-mount-path",
-			Aliases:  []string{"m"},
+			Name:     "base-path-map",
+			Aliases:  []string{"pm"},
 			Required: true,
 		},
 		&cli.UintFlag{
@@ -320,9 +345,9 @@ func main() {
 	}
 
 	app.Action = func(c *cli.Context) error {
-		efsMouthPath, err := filepath.Abs(c.String("efs-mount-path"))
+		basePathMap, err := createBasePathMap(c.String("base-path-map"))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to get efs-mount-path: %s", err.Error())
+			fmt.Fprintf(os.Stderr, "failed to get base-path-map: %s", err.Error())
 			panic(err)
 		}
 
@@ -345,7 +370,7 @@ func main() {
 			s3DestPrefix:               c.String("s3-dest-prefix"),
 			sqsQueueURL:                c.String("sqs-queue-url"),
 			sqsBatchWaitTime:           c.Uint("sqs-batch-wait-time"),
-			efsMountPath:               efsMouthPath,
+			basePathMap:                basePathMap,
 			gracefulShutdownTimeout:    c.Uint("graceful-shutdown-timeout"),
 			port:                       c.Int("port"),
 			logPath:                    logPath,
@@ -514,9 +539,19 @@ func (e *environment) runServer(ctx context.Context, engine *gin.Engine) {
 	}
 
 	go func() {
+		listen, err := net.Listen("tcp", srv.Addr)
+		if err != nil {
+			e.log.Panic("server failed to listen", zap.Error(err))
+			return
+		}
+
+		_, _ = daemon.SdNotify(false, daemon.SdNotifyReady)
 		e.log.Info("server started")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			e.log.Panic("server finished abnormally", zap.Error(err))
+
+		if err := srv.Serve(listen); err != nil {
+			if err != http.ErrServerClosed {
+				e.log.Panic("server finished abnormally", zap.Error(err))
+			}
 		}
 	}()
 
@@ -544,7 +579,7 @@ func (e *environment) run(ctx context.Context, runServer func(context.Context, *
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	engine.GET("/*any", func(c *gin.Context) {
-		e.handleRequest(c, c.Param("any"), c.GetHeader("Accept"), taskCh)
+		e.handleRequest(c, c.Param("any"), c.GetHeader("Accept"), c.Query("base"), taskCh)
 	})
 
 	runServer(ctx, engine)
@@ -1576,6 +1611,7 @@ func (e *environment) handleRequest(
 	c *gin.Context,
 	path string,
 	acceptHeader string,
+	basePathKey string,
 	taskCh chan<- *task,
 ) {
 	// path value contains leading "/".
@@ -1595,13 +1631,19 @@ func (e *environment) handleRequest(
 		return filepath.Ext(n)
 	}
 
+	basePath, ok := e.basePathMap[basePathKey]
+	if !ok {
+		c.String(http.StatusBadRequest, "invalid base path key")
+		return
+	}
+
 	// Sanitize and reject malicious path
-	efsAbsPath := filepath.Clean(filepath.Join(e.efsMountPath, path))
-	if !strings.HasPrefix(efsAbsPath, e.efsMountPath+"/") {
+	efsAbsPath := filepath.Clean(filepath.Join(basePath, path))
+	if !strings.HasPrefix(efsAbsPath, basePath+"/") {
 		c.String(http.StatusBadRequest, "invalid URL path")
 		return
 	}
-	sanitizedPath := strings.TrimPrefix(efsAbsPath, e.efsMountPath+"/")
+	sanitizedPath := strings.TrimPrefix(efsAbsPath, basePath+"/")
 	_, name := filepath.Split(sanitizedPath)
 
 	fpath := &filePath{

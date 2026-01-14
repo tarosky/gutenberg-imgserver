@@ -50,19 +50,19 @@ func TestImgServerSuite(t *testing.T) {
 func (s *ImgServerSuite) SetupTest() {
 	s.env = newTestEnvironment("imgserver", s.TestSuite)
 
-	s.Require().NoError(os.MkdirAll(s.env.efsMountPath+"/dir", 0755))
+	s.Require().NoError(os.MkdirAll(s.env.basePathMap[""]+"/dir", 0755))
 
 	for i := 0; i < 25; i++ {
-		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.jpg", s.env.efsMountPath, i), &s.Suite)
-		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.png", s.env.efsMountPath, i), &s.Suite)
+		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.jpg", s.env.basePathMap[""], i), &s.Suite)
+		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.png", s.env.basePathMap[""], i), &s.Suite)
 	}
 	for i := 25; i < 50; i++ {
-		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.JPG", s.env.efsMountPath, i), &s.Suite)
-		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.PNG", s.env.efsMountPath, i), &s.Suite)
+		copy(sampleJPEG, fmt.Sprintf("%s/dir/image%03d.JPG", s.env.basePathMap[""], i), &s.Suite)
+		copy(samplePNG, fmt.Sprintf("%s/dir/image%03d.PNG", s.env.basePathMap[""], i), &s.Suite)
 	}
-	copy(sampleCSS, fmt.Sprintf("%s/dir/style.css", s.env.efsMountPath), &s.Suite)
-	copy(sampleMinCSS, fmt.Sprintf("%s/dir/style.min.css", s.env.efsMountPath), &s.Suite)
-	copy(sampleNominifyCSS, fmt.Sprintf("%s/dir/nominify.css", s.env.efsMountPath), &s.Suite)
+	copy(sampleCSS, fmt.Sprintf("%s/dir/style.css", s.env.basePathMap[""]), &s.Suite)
+	copy(sampleMinCSS, fmt.Sprintf("%s/dir/style.min.css", s.env.basePathMap[""]), &s.Suite)
+	copy(sampleNominifyCSS, fmt.Sprintf("%s/dir/nominify.css", s.env.basePathMap[""]), &s.Suite)
 }
 
 func (s *ImgServerSuite) TearDownTest() {
@@ -398,7 +398,7 @@ func (s *ImgServerSuite) JPGAcceptedS3NoEFS(path string) {
 
 	s.uploadFileToS3Dest(s.ctx, path, toWebPPath(path), sampleJPEGWebP, nil)
 	s.uploadFileToS3Src(s.ctx, path, path, sampleJPEG, nil)
-	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
+	s.Require().NoError(os.Remove(s.env.basePathMap[""] + "/" + path))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
@@ -544,7 +544,7 @@ func (s *ImgServerSuite) JPGUnacceptedS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
 	s.uploadFileToS3Dest(s.ctx, path, toWebPPath(path), sampleJPEGWebP, nil)
-	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
+	s.Require().NoError(os.Remove(s.env.basePathMap[""] + "/" + path))
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, oldSafariAcceptHeader)
 
@@ -685,8 +685,8 @@ func (s *ImgServerSuite) Test_JPGAcceptedNoS3EFSBatchSendWait() {
 }
 
 func (s *ImgServerSuite) Test_ReopenLogFile() {
-	oldLogPath := s.env.efsMountPath + "/imgserver.log.old"
-	currentLogPath := s.env.efsMountPath + "/imgserver.log"
+	oldLogPath := s.env.basePathMap[""] + "/imgserver.log.old"
+	currentLogPath := s.env.basePathMap[""] + "/imgserver.log"
 
 	s.env.log.Info("first message")
 
@@ -744,7 +744,7 @@ func (s *ImgServerSuite) Test_CSSS3NoEFS() {
 
 	s.uploadFileToS3Dest(s.ctx, cssPathL, cssPathL, sampleMinCSS, nil)
 	s.uploadFileToS3Src(s.ctx, cssPathL, cssPathL, sampleCSS, nil)
-	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + cssPathL))
+	s.Require().NoError(os.Remove(s.env.basePathMap[""] + "/" + cssPathL))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+cssPathL, chromeAcceptHeader)
@@ -870,7 +870,7 @@ func (s *ImgServerSuite) FileS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
 	s.uploadFileToS3Dest(s.ctx, path, path, sampleJPEG, nil)
-	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
+	s.Require().NoError(os.Remove(s.env.basePathMap[""] + "/" + path))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
@@ -927,7 +927,7 @@ func (s *ImgServerSuite) Test_MinCSSNoS3NoEFS() {
 func (s *ImgServerSuite) FileNoS3NoEFS(path string) {
 	const longTextLen = int64(1024)
 
-	s.Require().NoError(os.Remove(s.env.efsMountPath + "/" + path))
+	s.Require().NoError(os.Remove(s.env.basePathMap[""] + "/" + path))
 
 	s.serve(func(ctx context.Context, ts *httptest.Server) {
 		res := s.request(ctx, ts, "/"+path, chromeAcceptHeader)
