@@ -579,7 +579,7 @@ func (e *environment) run(ctx context.Context, runServer func(context.Context, *
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	engine.GET("/*any", func(c *gin.Context) {
-		e.handleRequest(c, c.Param("any"), c.GetHeader("Accept"), c.Query("base"), taskCh)
+		e.handleRequest(c, c.Param("any"), c.GetHeader("Accept"), c.GetHeader("Base-Path-Key"), taskCh)
 	})
 
 	runServer(ctx, engine)
