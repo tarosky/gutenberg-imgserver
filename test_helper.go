@@ -20,18 +20,18 @@ import (
 )
 
 const (
-	sampleJPEG        = "samplefile/image.jpg"
-	sampleJPEGWebP    = "samplefile/image.jpg.webp"
-	samplePNG         = "samplefile/image.png"
-	samplePNGWebP     = "samplefile/image.png.webp"
+	sampleJPEG     = "samplefile/image.jpg"
+	sampleJPEGWebP = "samplefile/image.jpg.webp"
+	samplePNG      = "samplefile/image.png"
+	// samplePNGWebP     = "samplefile/image.png.webp"
 	sampleCSS         = "samplefile/style.css"
 	sampleMinCSS      = "samplefile/style.min.css"
 	sampleNominifyCSS = "samplefile/nominify.css"
 
-	sampleJPEGSize        = int64(23838)
-	sampleJPEGWebPSize    = int64(5294)
-	samplePNGSize         = int64(28877)
-	samplePNGWebPSize     = int64(5138)
+	sampleJPEGSize     = int64(23838)
+	sampleJPEGWebPSize = int64(5294)
+	// samplePNGSize         = int64(28877)
+	// samplePNGWebPSize     = int64(5138)
 	sampleCSSSize         = int64(91)
 	sampleMinCSSSize      = int64(58)
 	sampleNominifyCSSSize = int64(91)
@@ -110,7 +110,7 @@ func getTestConfig(name string) *configure {
 		s3DestPrefix:               generateSafeRandomString() + "/" + name + "/",
 		sqsQueueURL:                sqsURL,
 		sqsBatchWaitTime:           2,
-		efsMountPath:               efsPath,
+		basePathMap:                map[string]string{"": efsPath},
 		gracefulShutdownTimeout:    5,
 		port:                       0, // Not used
 		logPath:                    efsPath + "/imgserver.log",
@@ -143,12 +143,12 @@ func newTestEnvironment(name string, s *TestSuite) *environment {
 
 	require.NoError(
 		s.T(),
-		os.RemoveAll(cfg.efsMountPath),
+		os.RemoveAll(cfg.basePathMap[""]),
 		"failed to remove directory")
 
 	require.NoError(
 		s.T(),
-		os.MkdirAll(cfg.efsMountPath, 0755),
+		os.MkdirAll(cfg.basePathMap[""], 0755),
 		"failed to create directory")
 
 	log := createLogger(s.ctx, cfg.logPath, cfg.errorLogPath)
